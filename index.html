@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Voice Capture</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body {
+    margin: 0; height: 100%; background: #0b0d12; color: #e8eaf6;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 18px; flex: none;
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; color: #8892b0; letter-spacing: .5px; }
+  #gear-btn {
+    background: none; border: none; color: #8892b0; font-size: 20px; padding: 6px;
+    cursor: pointer; line-height: 1;
+  }
+
+  #stage {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px; text-align: center; cursor: pointer;
+  }
+  #status-dot {
+    width: 120px; height: 120px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 46px; margin-bottom: 28px;
+    background: #171a24; border: 3px solid #2a2f45;
+    transition: all .15s ease;
+  }
+  #status-dot.listening { border-color: #e05252; background: rgba(224,82,82,.12); animation: pulse 1.1s ease-in-out infinite; }
+  #status-dot.busy      { border-color: #f0a500; background: rgba(240,165,0,.12); }
+  #status-dot.done      { border-color: #4caf87; background: rgba(76,175,135,.12); }
+  #status-dot.error     { border-color: #e05252; background: rgba(224,82,82,.12); }
+  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+  #status-label { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+  #status-sub   { font-size: 15px; color: #8892b0; max-width: 320px; line-height: 1.5; min-height: 22px; }
+  #heard-text   { font-size: 19px; color: #4caf87; font-weight: 600; margin-top: 4px; }
+
+  footer { flex: none; padding: 14px; text-align: center; font-size: 12px; color: #4a5068; }
+
+  /* Settings panel */
+  #settings-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: none; align-items: center; justify-content: center; z-index: 10; padding: 20px;
+  }
+  #settings-overlay.show { display: flex; }
+  #settings-panel {
+    background: #171a24; border: 1px solid #2a2f45; border-radius: 14px;
+    padding: 20px; width: 100%; max-width: 420px;
+  }
+  #settings-panel h2 { font-size: 16px; margin: 0 0 6px; }
+  #settings-panel p { font-size: 13px; color: #8892b0; line-height: 1.5; margin: 0 0 14px; }
+  #settings-panel label { font-size: 12px; color: #8892b0; display: block; margin-bottom: 6px; }
+  #url-template {
+    width: 100%; background: #0b0d12; border: 1px solid #2a2f45; border-radius: 8px;
+    padding: 10px 12px; color: #e8eaf6; font-size: 14px; font-family: monospace;
+    margin-bottom: 6px; user-select: text;
+  }
+  #settings-hint { font-size: 11px; color: #4a5068; margin-bottom: 16px; }
+  .settings-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .settings-actions button {
+    padding: 10px 16px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer;
+    font-family: inherit; font-weight: 600;
+  }
+  #settings-cancel { background: #22263a; color: #e8eaf6; }
+  #settings-save   { background: #5b8af5; color: #fff; }
+  #settings-status { font-size: 12px; color: #4caf87; margin-top: 10px; min-height: 16px; }
+
+  #manual-hint { font-size: 12px; color: #4a5068; margin-top: 22px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>VOICE CAPTURE</h1>
+    <button id="gear-btn" onclick="openSettings()">&#9881;</button>
+  </header>
+
+  <div id="stage" onclick="toggleCapture()">
+    <div id="status-dot">&#127908;</div>
+    <div id="status-label" id="status-label">Ready</div>
+    <div id="status-sub">Press the remote, or tap here, to start listening</div>
+    <div id="heard-text"></div>
+    <div id="manual-hint">Works as a manual tap button too</div>
+  </div>
+
+  <footer>Lav mic recommended · works best in a quiet-ish moment</footer>
+</div>
+
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <h2>Destination</h2>
+    <p>Where the captured word gets sent. Use <code>{TEXT}</code> as a placeholder — it'll be replaced with the transcribed word (URL-encoded) before opening.</p>
+    <label>URL template</label>
+    <input type="text" id="url-template" placeholder="yourapp://capture?word={TEXT}">
+    <div id="settings-hint">Example: myshowapp://reveal?word={TEXT}</div>
+    <div class="settings-actions">
+      <button id="settings-cancel" onclick="closeSettings()">Cancel</button>
+      <button id="settings-save" onclick="saveSettings()">Save</button>
+    </div>
+    <div id="settings-status"></div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'voiceCaptureUrlTemplate';
+
+let state = 'idle'; // idle | listening | busy | done | error
+let mediaStream = null;
+let recorder = null;
+let chunks = [];
+
+const dotEl    = document.getElementById('status-dot');
+const labelEl  = document.getElementById('status-label');
+const subEl    = document.getElementById('status-sub');
+const heardEl  = document.getElementById('heard-text');
+
+function setState(next, label, sub, heard) {
+  state = next;
+  dotEl.className = next === 'idle' ? '' : next;
+  labelEl.textContent = label;
+  subEl.textContent = sub || '';
+  heardEl.textContent = heard || '';
+  dotEl.textContent = next === 'listening' ? '\u{1F534}' : next === 'busy' ? '⏳' : next === 'done' ? '✅' : next === 'error' ? '⚠️' : '\u{1F3A4}';
+}
+
+function toggleCapture() {
+  if (state === 'idle' || state === 'done' || state === 'error') {
+    startListening();
+  } else if (state === 'listening') {
+    stopListening();
+  }
+  // Ignore taps/presses while busy (transcribing) -- nothing to toggle mid-flight.
+}
+
+async function startListening() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setState('error', 'Mic access denied', 'Allow microphone access in browser settings, then try again.');
+    return;
+  }
+  const candidates = ['audio/mp4', 'audio/webm', 'audio/ogg'];
+  const mimeType = candidates.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+  try {
+    recorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
+  } catch (e) {
+    setState('error', 'Recording not supported', 'This browser can\'t record audio.');
+    stopStream();
+    return;
+  }
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+  recorder.onstop = handleRecordingStop;
+  recorder.start();
+  setState('listening', 'Listening…', 'Press again to stop');
+}
+
+function stopListening() {
+  if (recorder && recorder.state !== 'inactive') {
+    recorder.stop();
+  }
+  stopStream();
+}
+
+function stopStream() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+}
+
+async function handleRecordingStop() {
+  if (!chunks.length) {
+    setState('error', 'No audio captured', 'Try again — recording was empty.');
+    return;
+  }
+  setState('busy', 'Transcribing…', 'Sending to Whisper');
+  const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/mp4' });
+  chunks = [];
+
+  try {
+    const base64 = await blobToBase64(blob);
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: base64, mimeType: blob.type })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const text = (data.text || '').trim();
+    if (!text) {
+      setState('error', 'Heard nothing', 'Try again, a little closer to the mic.');
+      return;
+    }
+    setState('done', 'Captured', '', '“' + text + '”');
+    sendToDestination(text);
+  } catch (e) {
+    setState('error', 'Transcription failed', e.message || 'Unknown error');
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function sendToDestination(text) {
+  const template = localStorage.getItem(STORAGE_KEY);
+  if (!template) {
+    setState('error', 'No destination set', 'Tap the gear icon to set a destination URL first.');
+    return;
+  }
+  const url = template.replace('{TEXT}', encodeURIComponent(text));
+  // Give the "Captured" state a beat on screen before handing off, then reset
+  // so the app is ready for the next capture whenever focus returns.
+  setTimeout(() => { window.location.href = url; }, 600);
+  setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 2200);
+}
+
+/* ── Settings ── */
+function openSettings() {
+  document.getElementById('url-template').value = localStorage.getItem(STORAGE_KEY) || '';
+  document.getElementById('settings-status').textContent = '';
+  document.getElementById('settings-overlay').classList.add('show');
+}
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('show');
+}
+function saveSettings() {
+  const val = document.getElementById('url-template').value.trim();
+  if (!val) { document.getElementById('settings-status').textContent = 'Enter a URL template first.'; return; }
+  localStorage.setItem(STORAGE_KEY, val);
+  document.getElementById('settings-status').textContent = 'Saved.';
+  setTimeout(closeSettings, 500);
+}
+
+/* ── Remote (Bluetooth clicker) support ──
+   A presenter remote just emits ordinary keystrokes once paired -- no special
+   Bluetooth API needed. Bound to ANY key so it works regardless of which key
+   your specific remote sends, except while typing in the settings field. */
+document.addEventListener('keydown', function(e) {
+  if (e.repeat) return; // ignore auto-repeat while a key is held
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (document.getElementById('settings-overlay').classList.contains('show')) return;
+  e.preventDefault();
+  toggleCapture();
+});
+
+setState('idle', 'Ready', 'Press the remote, or tap here, to start listening');
+</script>
+</body>
+</html>
