@@ -107,6 +107,10 @@
       <button id="settings-save" onclick="saveSettings()">Save</button>
     </div>
     <div id="settings-status"></div>
+    <hr style="border:none;border-top:1px solid #2a2f45;margin:18px 0">
+    <label>For the Shortcuts automation</label>
+    <p style="margin-bottom:10px">Use this link (not the plain one) in the "Open URLs" action — it carries your destination with it, so nothing depends on the automation remembering anything between launches.</p>
+    <button id="settings-copy-launch" style="width:100%;padding:10px;border-radius:8px;border:none;background:#22263a;color:#e8eaf6;font-size:13px;cursor:pointer;font-family:inherit" onclick="copyLaunchUrl()">Copy Shortcuts launch URL</button>
   </div>
 </div>
 
@@ -217,8 +221,24 @@ function blobToBase64(blob) {
   });
 }
 
+// Destination can come from either localStorage (set via the Settings panel,
+// for manual use in a browser tab that actually persists) or a ?dest= query
+// param on the page URL itself (for Shortcuts automations, which hand the app
+// a fresh URL on every launch regardless of whether the browsing context that
+// ran it keeps any state between runs -- sidesteps relying on that entirely).
+// The query param wins when present, and also gets saved to localStorage so a
+// later manual open of the plain URL still has the last-known-good value.
+function getDestTemplate() {
+  const fromQuery = new URLSearchParams(location.search).get('dest');
+  if (fromQuery) {
+    localStorage.setItem(STORAGE_KEY, fromQuery);
+    return fromQuery;
+  }
+  return localStorage.getItem(STORAGE_KEY);
+}
+
 function sendToDestination(text) {
-  const template = localStorage.getItem(STORAGE_KEY);
+  const template = getDestTemplate();
   if (!template) {
     setState('error', 'No destination set', 'Tap the gear icon to set a destination URL first.');
     return;
@@ -245,6 +265,17 @@ function saveSettings() {
   localStorage.setItem(STORAGE_KEY, val);
   document.getElementById('settings-status').textContent = 'Saved.';
   setTimeout(closeSettings, 500);
+}
+
+function copyLaunchUrl() {
+  const val = document.getElementById('url-template').value.trim() || localStorage.getItem(STORAGE_KEY) || '';
+  if (!val) { document.getElementById('settings-status').textContent = 'Enter a URL template first.'; return; }
+  const launchUrl = location.origin + location.pathname + '?dest=' + encodeURIComponent(val);
+  navigator.clipboard.writeText(launchUrl).then(() => {
+    document.getElementById('settings-status').textContent = 'Copied — paste into the Shortcut\'s Open URLs action.';
+  }, () => {
+    document.getElementById('settings-status').textContent = launchUrl; // fallback: show it so it can be selected manually
+  });
 }
 
 /* ── Remote (Bluetooth clicker) support ──
