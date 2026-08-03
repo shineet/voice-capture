@@ -26,6 +26,12 @@ module.exports = async function handler(req, res) {
     form.append('file', blob, `capture.${ext}`);
     form.append('model', 'whisper-1');
     form.append('response_format', 'json');
+    // Without this, Whisper auto-detects language from the audio -- on a very
+    // short clip (one word/name) it sometimes guesses wrong and transcribes
+    // or transliterates into another language entirely. Forcing English stops
+    // that guesswork; it doesn't affect accuracy on names/places said in
+    // English, which is all this app is ever used for.
+    form.append('language', 'en');
     // Short, single-word/name/place captures -- nudges the model toward not
     // padding output with filler or guessing at a longer phrase than was said.
     form.append('prompt', 'A single word, name, or place, spoken clearly.');
