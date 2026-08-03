@@ -22,6 +22,11 @@ function readRawBody(req) {
 }
 
 module.exports = async function handler(req, res) {
+  // Keep-warm ping (see vercel.json cron) -- hits this function on a timer so
+  // Vercel doesn't cold-start a fresh container on the first real capture of
+  // a show, without spending anything on an actual Whisper call.
+  if (req.method === 'GET') return res.status(200).json({ status: 'warm' });
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
 
@@ -66,7 +71,11 @@ module.exports = async function handler(req, res) {
     // produces than whisper-1's more lenient ingestion. Reverted to whisper-1
     // as the known-good, verified-working model for this app's real audio.
     form.append('model', 'whisper-1');
-    form.append('response_format', 'json');
+    // Plain text instead of json -- OpenAI skips wrapping the response, which
+    // is a small but free latency/parsing saving with zero effect on the
+    // transcription itself. Errors still come back as JSON regardless, so
+    // that path below is unaffected.
+    form.append('response_format', 'text');
     // Without this, the model auto-detects language from the audio -- on a
     // very short clip (one word/name) it sometimes guesses wrong and
     // transcribes or transliterates into another language entirely. Forcing
@@ -83,13 +92,14 @@ module.exports = async function handler(req, res) {
       body: form,
     });
 
-    const data = await r.json();
     if (!r.ok) {
+      const data = await r.json();
       console.error('Whisper error:', data);
       return res.status(502).json({ error: data.error?.message || 'Transcription failed' });
     }
 
-    return res.status(200).json({ text: data.text || '' });
+    const text = await r.text();
+    return res.status(200).json({ text: text.trim() });
   } catch (err) {
     console.error('transcribe error:', err);
     return res.status(500).json({ error: err.message });
