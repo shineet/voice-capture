@@ -36,7 +36,6 @@
   }
   #status-dot.listening { border-color: #e05252; background: rgba(224,82,82,.12); animation: pulse 1.1s ease-in-out infinite; }
   #status-dot.busy      { border-color: #f0a500; background: rgba(240,165,0,.12); }
-  #status-dot.ready     { border-color: #5b8af5; background: rgba(91,138,245,.14); animation: pulse 1.4s ease-in-out infinite; }
   #status-dot.done      { border-color: #4caf87; background: rgba(76,175,135,.12); }
   #status-dot.error     { border-color: #e05252; background: rgba(224,82,82,.12); }
   @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
@@ -117,11 +116,10 @@
 <script>
 const STORAGE_KEY = 'voiceCaptureUrlTemplate';
 
-let state = 'idle'; // idle | listening | busy | ready | done | error
+let state = 'idle'; // idle | listening | busy | done | error
 let mediaStream = null;
 let recorder = null;
 let chunks = [];
-let pendingText = null; // transcribed text waiting on a confirm press before handoff
 
 const dotEl    = document.getElementById('status-dot');
 const labelEl  = document.getElementById('status-label');
@@ -134,25 +132,21 @@ function setState(next, label, sub, heard) {
   labelEl.textContent = label;
   subEl.textContent = sub || '';
   heardEl.textContent = heard || '';
-  dotEl.textContent = next === 'listening' ? '\u{1F534}' : next === 'busy' ? '⏳' : next === 'ready' ? '\u{1F449}' : next === 'done' ? '✅' : next === 'error' ? '⚠️' : '\u{1F3A4}';
+  dotEl.textContent = next === 'listening' ? '\u{1F534}' : next === 'busy' ? '⏳' : next === 'done' ? '✅' : next === 'error' ? '⚠️' : '\u{1F3A4}';
 }
 
-// A THIRD press is required to actually hand off to the destination app --
-// not a design choice, an iOS constraint. Custom URL scheme redirects (like
-// `motherboard://...`) only get treated as trustworthy when they happen as a
-// direct, synchronous result of a tap/keypress. Auto-redirecting right after
-// the Whisper network call came back (the original design) crosses an async
-// boundary, which breaks that "trusted gesture" chain -- Safari then either
-// re-prompts every time or fails the handoff outright rather than remembering
-// anything. Making Send its own explicit press keeps every handoff freshly
-// gesture-attributed.
+// Back to two presses (start/stop) with the send happening automatically --
+// Shine's call, switching back to this tab manually between captures instead
+// of via a Shortcuts automation. Note this does reintroduce the async-redirect
+// gesture-chain issue: since the send now fires automatically after the
+// Whisper network call rather than from its own direct press, the "Open in
+// [app]?" prompt may show every time again (or occasionally fail to hand off)
+// rather than being remembered by iOS.
 function toggleCapture() {
   if (state === 'idle' || state === 'done' || state === 'error') {
     startListening();
   } else if (state === 'listening') {
     stopListening();
-  } else if (state === 'ready') {
-    confirmSend();
   }
   // Ignore taps/presses while busy (transcribing) -- nothing to toggle mid-flight.
 }
@@ -217,8 +211,8 @@ async function handleRecordingStop() {
       setState('error', 'Heard nothing', 'Try again, a little closer to the mic.');
       return;
     }
-    pendingText = text;
-    setState('ready', 'Press again to send', 'Press the remote, or tap here, to open the destination', '“' + text + '”');
+    setState('done', 'Captured', '', '“' + text + '”');
+    sendToDestination(text);
   } catch (e) {
     setState('error', 'Transcription failed', e.message || 'Unknown error');
   }
@@ -249,24 +243,17 @@ function getDestTemplate() {
   return localStorage.getItem(STORAGE_KEY);
 }
 
-// Fires directly from the confirm press (see toggleCapture) -- this MUST stay
-// a direct, synchronous consequence of that tap/keypress, with no async work
-// or setTimeout in between, or Safari stops treating the custom-scheme
-// redirect as gesture-trusted.
-function confirmSend() {
-  const text = pendingText;
-  pendingText = null;
-  if (!text) { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); return; }
-
+function sendToDestination(text) {
   const template = getDestTemplate();
   if (!template) {
     setState('error', 'No destination set', 'Tap the gear icon to set a destination URL first.');
     return;
   }
   const url = template.replace('{TEXT}', encodeURIComponent(text));
-  window.location.href = url;
-  setState('done', 'Sent', '', '“' + text + '”');
-  setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 1200);
+  // Give the "Captured" state a beat on screen before handing off, then reset
+  // so the app is ready for the next capture whenever you switch back to it.
+  setTimeout(() => { window.location.href = url; }, 600);
+  setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 2200);
 }
 
 /* ── Settings ── */
