@@ -116,6 +116,22 @@
 <script>
 const STORAGE_KEY = 'voiceCaptureUrlTemplate';
 
+// x-callback-url support: Voice Capture stays the initiator, same as always
+// (remote-triggered, sends to Motherboard). What's new is that the outbound
+// URL to Motherboard now automatically carries Voice Capture's OWN address
+// as x-success, plus x-source -- so if Motherboard honors that convention
+// (which its own "Custom Integration" screen, with x-success/x-error/
+// x-source and a "wait for x-callback response" toggle, strongly suggests it
+// does), it calls that address back automatically once it's done, returning
+// focus to Voice Capture with no automation/manual-switching needed. This is
+// a plain page open on the receiving end -- Voice Capture doesn't need to
+// parse or react to anything special when that happens, it just loads fresh
+// and is ready for the next capture.
+function appendParam(url, key, value) {
+  const sep = url.indexOf('?') === -1 ? '?' : '&';
+  return url + sep + key + '=' + encodeURIComponent(value);
+}
+
 let state = 'idle'; // idle | listening | busy | done | error
 let mediaStream = null;
 let recorder = null;
@@ -249,7 +265,18 @@ function sendToDestination(text) {
     setState('error', 'No destination set', 'Tap the gear icon to set a destination URL first.');
     return;
   }
-  const url = template.replace('{TEXT}', encodeURIComponent(text));
+  let url = template.replace('{TEXT}', encodeURIComponent(text));
+  // Tell the destination where to return to when it's done -- x-success is
+  // Voice Capture's own address, so if the destination honors the
+  // x-callback-url convention (Motherboard's own "Custom Integration" screen,
+  // with x-success/x-error/x-source and a "wait for x-callback response"
+  // toggle, strongly suggests it does), it calls that back automatically once
+  // it's finished, bringing focus back here with no automation or manual
+  // app-switching needed. Harmless to include even if the destination
+  // doesn't recognize these -- it just ignores unknown query params.
+  url = appendParam(url, 'x-success', location.origin + location.pathname);
+  url = appendParam(url, 'x-source', 'Voice Capture');
+
   // Give the "Captured" state a beat on screen before handing off, then reset
   // so the app is ready for the next capture whenever you switch back to it.
   setTimeout(() => { window.location.href = url; }, 600);
