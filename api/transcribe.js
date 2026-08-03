@@ -24,13 +24,14 @@ module.exports = async function handler(req, res) {
 
     const form = new FormData();
     form.append('file', blob, `capture.${ext}`);
-    // gpt-4o-transcribe is OpenAI's newer, more accurate successor to
-    // whisper-1 -- built on GPT-4o's audio understanding rather than the
-    // older Whisper architecture, with meaningfully lower error rates on
-    // short, name-heavy audio like this app captures. Same endpoint/auth as
-    // whisper-1, just a different model name. If this ever needs to be rolled
-    // back, 'whisper-1' is the known-good fallback.
-    form.append('model', 'gpt-4o-transcribe');
+    // Tried gpt-4o-transcribe (OpenAI's newer, generally more accurate model)
+    // but it consistently rejected real on-device recordings from Safari's
+    // MediaRecorder ("audio file might be corrupted or unsupported") even
+    // though a synthetic test file worked fine -- almost certainly stricter
+    // handling of the fragmented-MP4 container MediaRecorder actually
+    // produces than whisper-1's more lenient ingestion. Reverted to whisper-1
+    // as the known-good, verified-working model for this app's real audio.
+    form.append('model', 'whisper-1');
     form.append('response_format', 'json');
     // Without this, the model auto-detects language from the audio -- on a
     // very short clip (one word/name) it sometimes guesses wrong and
