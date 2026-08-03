@@ -1,6 +1,6 @@
 // api/transcribe.js
 // POST { audio: base64 string, mimeType: string } -> { text: string }
-// Forwards the captured clip to OpenAI's Whisper transcription endpoint.
+// Forwards the captured clip to OpenAI's audio transcription endpoint.
 
 const EXT_BY_MIME = {
   'audio/mp4':  'm4a',
@@ -24,13 +24,19 @@ module.exports = async function handler(req, res) {
 
     const form = new FormData();
     form.append('file', blob, `capture.${ext}`);
-    form.append('model', 'whisper-1');
+    // gpt-4o-transcribe is OpenAI's newer, more accurate successor to
+    // whisper-1 -- built on GPT-4o's audio understanding rather than the
+    // older Whisper architecture, with meaningfully lower error rates on
+    // short, name-heavy audio like this app captures. Same endpoint/auth as
+    // whisper-1, just a different model name. If this ever needs to be rolled
+    // back, 'whisper-1' is the known-good fallback.
+    form.append('model', 'gpt-4o-transcribe');
     form.append('response_format', 'json');
-    // Without this, Whisper auto-detects language from the audio -- on a very
-    // short clip (one word/name) it sometimes guesses wrong and transcribes
-    // or transliterates into another language entirely. Forcing English stops
-    // that guesswork; it doesn't affect accuracy on names/places said in
-    // English, which is all this app is ever used for.
+    // Without this, the model auto-detects language from the audio -- on a
+    // very short clip (one word/name) it sometimes guesses wrong and
+    // transcribes or transliterates into another language entirely. Forcing
+    // English stops that guesswork; it doesn't affect accuracy on names/
+    // places said in English, which is all this app is ever used for.
     form.append('language', 'en');
     // Short, single-word/name/place captures -- nudges the model toward not
     // padding output with filler or guessing at a longer phrase than was said.
