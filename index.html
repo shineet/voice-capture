@@ -256,11 +256,27 @@ function sendToDestination(text) {
   setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 2200);
 }
 
-/* ── Settings ── */
+/* ── Settings ──
+   The destination template is cached in localStorage (read synchronously by
+   sendToDestination -- must stay that way, no network dependency mid-capture)
+   but also synced to a small server-side store (/api/destination, backed by
+   Vercel Blob) so it carries over to a different phone/browser instead of
+   being stuck on just this device. */
+function syncDestinationFromServer(onDone) {
+  fetch('/api/destination')
+    .then(r => r.json())
+    .then(d => { if (d.value) localStorage.setItem(STORAGE_KEY, d.value); if (onDone) onDone(d.value || ''); })
+    .catch(() => { if (onDone) onDone(null); }); // network hiccup or not configured yet -- keep whatever's cached locally
+}
+
 function openSettings() {
   document.getElementById('url-template').value = localStorage.getItem(STORAGE_KEY) || '';
   document.getElementById('settings-status').textContent = '';
   document.getElementById('settings-overlay').classList.add('show');
+  // Pull the latest in case it was changed on another device since last sync.
+  syncDestinationFromServer(value => {
+    if (value) document.getElementById('url-template').value = value;
+  });
 }
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('show');
@@ -269,8 +285,18 @@ function saveSettings() {
   const val = document.getElementById('url-template').value.trim();
   if (!val) { document.getElementById('settings-status').textContent = 'Enter a URL template first.'; return; }
   localStorage.setItem(STORAGE_KEY, val);
-  document.getElementById('settings-status').textContent = 'Saved.';
-  setTimeout(closeSettings, 500);
+  document.getElementById('settings-status').textContent = 'Saved on this device. Syncing…';
+  fetch('/api/destination', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: val })
+  })
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('settings-status').textContent = d.error
+        ? 'Saved on this device only (sync failed: ' + d.error + ')'
+        : 'Saved and synced to all devices.';
+    })
+    .catch(() => { document.getElementById('settings-status').textContent = 'Saved on this device only (sync failed).'; });
 }
 
 /* ── Remote (Bluetooth clicker) support ──
@@ -287,6 +313,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 setState('idle', 'Ready', 'Press the remote, or tap here, to start listening');
+syncDestinationFromServer(); // pick up a destination saved from a different device
 </script>
 </body>
 </html>

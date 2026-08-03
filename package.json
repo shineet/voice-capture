@@ -1,0 +1,7 @@
+{
+  "name": "voice-capture",
+  "private": true,
+  "dependencies": {
+    "@vercel/blob": "latest"
+  }
+}
