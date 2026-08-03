@@ -12,6 +12,15 @@ const EXT_BY_MIME = {
   'audio/mpeg': 'mp3',
 };
 
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
@@ -23,17 +32,23 @@ module.exports = async function handler(req, res) {
   // which is the main lever available for cutting latency without touching
   // the Whisper call itself.
   const contentType = req.headers['content-type'] || '';
+  const rawBody = await readRawBody(req);
+  if (rawBody.length === 0) return res.status(400).json({ error: 'Missing audio' });
+
   let buffer, mimeType;
   if (contentType.includes('application/json')) {
-    const { audio, mimeType: mt } = req.body || {};
+    let parsed;
+    try {
+      parsed = JSON.parse(rawBody.toString('utf8'));
+    } catch {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+    const { audio, mimeType: mt } = parsed || {};
     if (!audio) return res.status(400).json({ error: 'Missing audio' });
     buffer = Buffer.from(audio, 'base64');
     mimeType = mt;
   } else {
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'Missing audio' });
-    }
-    buffer = req.body;
+    buffer = rawBody;
     mimeType = contentType;
   }
 
@@ -80,3 +95,9 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 };
+
+// Vercel's automatic req.body parsing is unreliable for arbitrary binary
+// content types like audio/mp4 (it doesn't consistently hand back a Buffer),
+// so the handler above reads the request stream directly instead of
+// trusting req.body -- this opts out of the automatic parsing entirely.
+module.exports.config = { api: { bodyParser: false } };
