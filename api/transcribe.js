@@ -1,5 +1,7 @@
 // api/transcribe.js
-// POST { audio: base64 string, mimeType: string } -> { text: string }
+// POST either JSON { audio: base64 string, mimeType: string } (web app), or
+// raw audio bytes with Content-Type set to the mime type (native app).
+// -> { text: string }
 // Forwards the captured clip to OpenAI's audio transcription endpoint.
 
 const EXT_BY_MIME = {
@@ -14,11 +16,28 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
 
-  const { audio, mimeType } = req.body || {};
-  if (!audio) return res.status(400).json({ error: 'Missing audio' });
+  // Two request shapes share this endpoint: the web app posts JSON with a
+  // base64 `audio` field (kept for backward compatibility), while the native
+  // app posts the raw audio bytes directly with Content-Type set to the
+  // mime type -- skipping base64 (~33% smaller) and JSON parsing entirely,
+  // which is the main lever available for cutting latency without touching
+  // the Whisper call itself.
+  const contentType = req.headers['content-type'] || '';
+  let buffer, mimeType;
+  if (contentType.includes('application/json')) {
+    const { audio, mimeType: mt } = req.body || {};
+    if (!audio) return res.status(400).json({ error: 'Missing audio' });
+    buffer = Buffer.from(audio, 'base64');
+    mimeType = mt;
+  } else {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Missing audio' });
+    }
+    buffer = req.body;
+    mimeType = contentType;
+  }
 
   try {
-    const buffer = Buffer.from(audio, 'base64');
     const ext = EXT_BY_MIME[mimeType] || 'webm';
     const blob = new Blob([buffer], { type: mimeType || 'application/octet-stream' });
 
