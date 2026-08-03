@@ -36,6 +36,7 @@
   }
   #status-dot.listening { border-color: #e05252; background: rgba(224,82,82,.12); animation: pulse 1.1s ease-in-out infinite; }
   #status-dot.busy      { border-color: #f0a500; background: rgba(240,165,0,.12); }
+  #status-dot.ready     { border-color: #5b8af5; background: rgba(91,138,245,.14); animation: pulse 1.4s ease-in-out infinite; }
   #status-dot.done      { border-color: #4caf87; background: rgba(76,175,135,.12); }
   #status-dot.error     { border-color: #e05252; background: rgba(224,82,82,.12); }
   @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
@@ -109,18 +110,18 @@
     <div id="settings-status"></div>
     <hr style="border:none;border-top:1px solid #2a2f45;margin:18px 0">
     <label>For the Shortcuts automation</label>
-    <p style="margin-bottom:10px">Use this link (not the plain one) in the "Open URLs" action — it carries your destination with it, so nothing depends on the automation remembering anything between launches.</p>
-    <button id="settings-copy-launch" style="width:100%;padding:10px;border-radius:8px;border:none;background:#22263a;color:#e8eaf6;font-size:13px;cursor:pointer;font-family:inherit" onclick="copyLaunchUrl()">Copy Shortcuts launch URL</button>
+    <p style="margin-bottom:10px">Save your destination here first, then point the automation's "Open URLs" action at the <b>plain</b> page URL (no <code>?dest=</code>) — Safari can refresh/reuse that tab without a query string surviving, so the setting needs to already be saved here rather than carried in the link.</p>
   </div>
 </div>
 
 <script>
 const STORAGE_KEY = 'voiceCaptureUrlTemplate';
 
-let state = 'idle'; // idle | listening | busy | done | error
+let state = 'idle'; // idle | listening | busy | ready | done | error
 let mediaStream = null;
 let recorder = null;
 let chunks = [];
+let pendingText = null; // transcribed text waiting on a confirm press before handoff
 
 const dotEl    = document.getElementById('status-dot');
 const labelEl  = document.getElementById('status-label');
@@ -133,14 +134,25 @@ function setState(next, label, sub, heard) {
   labelEl.textContent = label;
   subEl.textContent = sub || '';
   heardEl.textContent = heard || '';
-  dotEl.textContent = next === 'listening' ? '\u{1F534}' : next === 'busy' ? '⏳' : next === 'done' ? '✅' : next === 'error' ? '⚠️' : '\u{1F3A4}';
+  dotEl.textContent = next === 'listening' ? '\u{1F534}' : next === 'busy' ? '⏳' : next === 'ready' ? '\u{1F449}' : next === 'done' ? '✅' : next === 'error' ? '⚠️' : '\u{1F3A4}';
 }
 
+// A THIRD press is required to actually hand off to the destination app --
+// not a design choice, an iOS constraint. Custom URL scheme redirects (like
+// `motherboard://...`) only get treated as trustworthy when they happen as a
+// direct, synchronous result of a tap/keypress. Auto-redirecting right after
+// the Whisper network call came back (the original design) crosses an async
+// boundary, which breaks that "trusted gesture" chain -- Safari then either
+// re-prompts every time or fails the handoff outright rather than remembering
+// anything. Making Send its own explicit press keeps every handoff freshly
+// gesture-attributed.
 function toggleCapture() {
   if (state === 'idle' || state === 'done' || state === 'error') {
     startListening();
   } else if (state === 'listening') {
     stopListening();
+  } else if (state === 'ready') {
+    confirmSend();
   }
   // Ignore taps/presses while busy (transcribing) -- nothing to toggle mid-flight.
 }
@@ -205,8 +217,8 @@ async function handleRecordingStop() {
       setState('error', 'Heard nothing', 'Try again, a little closer to the mic.');
       return;
     }
-    setState('done', 'Captured', '', '“' + text + '”');
-    sendToDestination(text);
+    pendingText = text;
+    setState('ready', 'Press again to send', 'Press the remote, or tap here, to open the destination', '“' + text + '”');
   } catch (e) {
     setState('error', 'Transcription failed', e.message || 'Unknown error');
   }
@@ -221,13 +233,13 @@ function blobToBase64(blob) {
   });
 }
 
-// Destination can come from either localStorage (set via the Settings panel,
-// for manual use in a browser tab that actually persists) or a ?dest= query
-// param on the page URL itself (for Shortcuts automations, which hand the app
-// a fresh URL on every launch regardless of whether the browsing context that
-// ran it keeps any state between runs -- sidesteps relying on that entirely).
-// The query param wins when present, and also gets saved to localStorage so a
-// later manual open of the plain URL still has the last-known-good value.
+// Destination normally comes from localStorage, set once via the Settings
+// panel. A ?dest= query param is also honored (and gets saved to localStorage
+// when present) for manual/bookmarked use -- but the Shortcuts automation
+// should point at the PLAIN url with no query string. iOS Safari's "reuse the
+// last open tab" behavior for app-triggered opens can refresh that tab
+// without actually carrying a new query string into it, so anything relying
+// on ?dest= arriving fresh on every automated launch isn't reliable.
 function getDestTemplate() {
   const fromQuery = new URLSearchParams(location.search).get('dest');
   if (fromQuery) {
@@ -237,17 +249,24 @@ function getDestTemplate() {
   return localStorage.getItem(STORAGE_KEY);
 }
 
-function sendToDestination(text) {
+// Fires directly from the confirm press (see toggleCapture) -- this MUST stay
+// a direct, synchronous consequence of that tap/keypress, with no async work
+// or setTimeout in between, or Safari stops treating the custom-scheme
+// redirect as gesture-trusted.
+function confirmSend() {
+  const text = pendingText;
+  pendingText = null;
+  if (!text) { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); return; }
+
   const template = getDestTemplate();
   if (!template) {
     setState('error', 'No destination set', 'Tap the gear icon to set a destination URL first.');
     return;
   }
   const url = template.replace('{TEXT}', encodeURIComponent(text));
-  // Give the "Captured" state a beat on screen before handing off, then reset
-  // so the app is ready for the next capture whenever focus returns.
-  setTimeout(() => { window.location.href = url; }, 600);
-  setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 2200);
+  window.location.href = url;
+  setState('done', 'Sent', '', '“' + text + '”');
+  setTimeout(() => { setState('idle', 'Ready', 'Press the remote, or tap here, to start listening'); }, 1200);
 }
 
 /* ── Settings ── */
@@ -265,17 +284,6 @@ function saveSettings() {
   localStorage.setItem(STORAGE_KEY, val);
   document.getElementById('settings-status').textContent = 'Saved.';
   setTimeout(closeSettings, 500);
-}
-
-function copyLaunchUrl() {
-  const val = document.getElementById('url-template').value.trim() || localStorage.getItem(STORAGE_KEY) || '';
-  if (!val) { document.getElementById('settings-status').textContent = 'Enter a URL template first.'; return; }
-  const launchUrl = location.origin + location.pathname + '?dest=' + encodeURIComponent(val);
-  navigator.clipboard.writeText(launchUrl).then(() => {
-    document.getElementById('settings-status').textContent = 'Copied — paste into the Shortcut\'s Open URLs action.';
-  }, () => {
-    document.getElementById('settings-status').textContent = launchUrl; // fallback: show it so it can be selected manually
-  });
 }
 
 /* ── Remote (Bluetooth clicker) support ──
