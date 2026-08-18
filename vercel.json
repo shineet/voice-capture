@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/sketch.js": {
+      "maxDuration": 60
+    }
+  }
+}

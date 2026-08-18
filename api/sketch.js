@@ -1,18 +1,30 @@
 // api/sketch.js
-// POST { word: string } -> { strokes: [[x0,y0,x1,y1,...], ...] }
+// POST { word: string } -> { strokes: [[x0,y0,x1,y1,...], ...], engine }
 //
 // The fallback for when the app's built-in library drawing for a word is wrong.
-// An LLM draws the word as simple line art and returns it as STROKES (flat
-// [x,y,x,y,...] arrays, coordinates normalised 0..1, origin top-left, y down) --
-// the exact same shape as the bundled builtin-sketches, so the result flows
-// straight through the app's hand-drawn pencil renderer for the thermal printers
-// AND scales to the Motherboard's path contract. No picture is generated: the
-// board can't take a PNG, and "looks like something I scribbled" is line art by
-// nature.
+// Returns STROKES (flat [x,y,...] arrays, normalised 0..1, origin top-left) --
+// the bundled-library shape -- so the result flows through the app's hand-drawn
+// pencil renderer for the printers AND the Motherboard's path contract alike.
+//
+// Two engines, tried in order:
+//   1. IMAGE (default): an image model draws a clean, recognisable line picture,
+//      then lib/trace.js vectorises it to strokes. Slower (~10-15s) but the only
+//      route that actually looks like the thing -- a text model plotting
+//      coordinates blind cannot draw an organic shape (a dog came out a blob).
+//      This is what makes an occasional AI redraw good enough to replace the
+//      library drawing for that word.
+//   2. COORDINATE (fallback): the old route -- a text model emits coordinates
+//      directly. Fast, fine for simple/rigid objects, used only if the image
+//      step fails so the button never dead-ends.
 //
 // The OpenAI key stays here, server-side, same as transcribe.js.
 
+const { traceToStrokes } = require('../lib/trace.js');
+
 const MODEL = process.env.SKETCH_MODEL || 'gpt-4o';
+const IMAGE_MODEL = process.env.SKETCH_IMAGE_MODEL || 'gpt-image-1';
+// Set false to force the fast coordinate route (e.g. if image billing is off).
+const USE_IMAGE = process.env.SKETCH_USE_IMAGE !== 'false';
 
 // Keep well inside the Motherboard budget (strokeCount + totalPointCount <=
 // 12000) and fast to draw: a quick sketch, not an engraving.
@@ -84,6 +96,76 @@ function sanitise(raw) {
   return out.length ? out : null;
 }
 
+// ── Engine 1: image model, then trace ────────────────────────────────────────
+
+const IMAGE_PROMPT = (word) =>
+  `A simple black and white line drawing of a ${word}. Bold, clean, solid black `
+  + `outlines on a plain pure-white background. Minimalist coloring-book style, a `
+  + `single centred object filling most of the frame. No shading, no grey, no `
+  + `fill, no colour, no background scenery, no text, no border. Just clear black `
+  + `outlines of the ${word} so it is instantly recognisable.`;
+
+async function sketchByImage(word) {
+  const r = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: IMAGE_MODEL,
+      prompt: IMAGE_PROMPT(word),
+      size: '1024x1024',
+      n: 1,
+    }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.error?.message || `Image model HTTP ${r.status}`);
+  }
+  const data = await r.json();
+  const b64 = data.data?.[0]?.b64_json;
+  if (!b64) throw new Error('Image model returned no image');
+  const buffer = Buffer.from(b64, 'base64');
+  // Trace the line art to strokes. threshold high-ish so only the solid black
+  // lines become ink; turdSize drops JPEG/edge speckle.
+  const strokes = await traceToStrokes(buffer, { threshold: 160, turdSize: 10 });
+  if (!strokes || !strokes.length) throw new Error('Trace produced no strokes');
+  return strokes;
+}
+
+// ── Engine 2: coordinate route (fallback) ────────────────────────────────────
+
+async function sketchByCoordinates(word) {
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM },
+        { role: 'user', content: `Draw: ${word}` },
+      ],
+    }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.error?.message || `Coordinate model HTTP ${r.status}`);
+  }
+  const data = await r.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  let parsed;
+  try { parsed = JSON.parse(content); } catch { throw new Error('Model returned malformed drawing'); }
+  const strokes = sanitise(parsed);
+  if (!strokes) throw new Error('Model returned an empty drawing');
+  return strokes;
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -101,44 +183,27 @@ module.exports = async function handler(req, res) {
   if (!word) return res.status(400).json({ error: 'Missing word' });
   if (word.length > 60) return res.status(400).json({ error: 'Word too long' });
 
+  // Try the good engine first; fall back to the fast one so the button never
+  // dead-ends. `engine` in the reply says which one drew it.
+  if (USE_IMAGE) {
+    try {
+      const strokes = await sketchByImage(word);
+      return res.status(200).json({ strokes, engine: 'image' });
+    } catch (err) {
+      console.error('sketch image engine failed, falling back to coordinates:', err.message);
+    }
+  }
+
   try {
-    const r = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.7,             // a little variation so a redraw differs
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: `Draw: ${word}` },
-        ],
-      }),
-    });
-
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      console.error('sketch model error:', data);
-      return res.status(502).json({ error: data.error?.message || 'Sketch failed' });
-    }
-
-    const data = await r.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    let parsed;
-    try { parsed = JSON.parse(content); } catch {
-      console.error('sketch: model returned non-JSON:', content.slice(0, 200));
-      return res.status(502).json({ error: 'Model returned malformed drawing' });
-    }
-
-    const strokes = sanitise(parsed);
-    if (!strokes) return res.status(502).json({ error: 'Model returned an empty drawing' });
-
-    return res.status(200).json({ strokes });
+    const strokes = await sketchByCoordinates(word);
+    return res.status(200).json({ strokes, engine: 'vector' });
   } catch (err) {
-    console.error('sketch error:', err);
-    return res.status(500).json({ error: err.message });
+    console.error('sketch error:', err.message);
+    return res.status(502).json({ error: err.message });
   }
 };
+
+// The image model can take 10-15s; the default 10s function budget would cut it
+// off. Vercel Hobby allows up to 60s when asked. (vercel.json sets this too, but
+// this keeps it correct if that file changes.)
+module.exports.config = { maxDuration: 60 };

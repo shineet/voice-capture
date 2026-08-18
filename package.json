@@ -2,6 +2,7 @@
   "name": "voice-capture",
   "private": true,
   "dependencies": {
-    "@vercel/blob": "latest"
+    "@vercel/blob": "^2.8.0",
+    "potrace": "^2.1.8"
   }
 }
