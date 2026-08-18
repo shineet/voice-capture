@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="robots" content="noindex, nofollow">
+<title>Notes</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f6f6f4; color: #111;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #000; color: #f2f2f2; }
+    textarea { background: #0e0e0e !important; color: #f2f2f2 !important; }
+  }
+  header { padding: 14px 18px 4px; font-size: 15px; font-weight: 600; opacity: .55; }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 6px 14px 14px; }
+  textarea {
+    flex: 1; width: 100%; min-height: 0;
+    border: none; outline: none; resize: none;
+    background: #fff; color: #111;
+    border-radius: 14px; padding: 18px;
+    font-size: 30px; line-height: 1.25; font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  .bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  button {
+    flex: 1; border: none; border-radius: 14px;
+    padding: 20px; font-size: 21px; font-weight: 700;
+    background: #1e6fff; color: #fff;
+    transition: transform .05s ease, background .15s ease, opacity .15s ease;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .5; }
+  button.ok { background: #24a148; }
+  button.err { background: #d1382c; }
+  #status { min-height: 20px; margin: 10px 4px 0; font-size: 14px; opacity: .6; }
+  #nokey { padding: 24px 18px; font-size: 16px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <header>Notes</header>
+  <main id="app" hidden>
+    <textarea id="box" autofocus autocomplete="off" autocorrect="off"
+      autocapitalize="none" spellcheck="false" enterkeyhint="send"
+      placeholder="Type here"></textarea>
+    <div class="bar">
+      <button id="send">Send</button>
+    </div>
+    <div id="status"></div>
+  </main>
+  <div id="nokey" hidden>This link is missing its code. Ask for the full link and open that one.</div>
+
+<script>
+(function () {
+  // The room token comes from the link Shine texts: ?room=... (or #room=...).
+  function param(name) {
+    var q = new URLSearchParams(location.search).get(name);
+    if (q) return q;
+    var h = new URLSearchParams((location.hash || '').replace(/^#/, '')).get(name);
+    return h || '';
+  }
+  var room = (param('room') || '').trim();
+  var app = document.getElementById('app');
+  var nokey = document.getElementById('nokey');
+  if (!room) { nokey.hidden = false; return; }
+  app.hidden = false;
+
+  var box = document.getElementById('box');
+  var send = document.getElementById('send');
+  var status = document.getElementById('status');
+  var busy = false;
+  var resetTimer = null;
+
+  function flash(text, cls) {
+    send.textContent = text;
+    send.className = cls || '';
+    clearTimeout(resetTimer);
+    resetTimer = setTimeout(function () {
+      send.textContent = 'Send'; send.className = '';
+    }, 1400);
+  }
+
+  async function submit() {
+    var word = box.value.trim();
+    if (!word || busy) return;
+    busy = true; send.disabled = true; status.textContent = 'Sending...';
+    try {
+      var r = await fetch('/api/remote-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: room, word: word })
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await r.json();
+      box.value = '';
+      status.textContent = '';
+      flash('Sent ✓', 'ok');
+      box.focus();
+    } catch (e) {
+      status.textContent = 'Not sent -- check signal and tap Send again.';
+      flash('Try again', 'err');
+    } finally {
+      busy = false; send.disabled = false;
+    }
+  }
+
+  send.addEventListener('click', submit);
+  // The keyboard "send" key fires it too, without adding a newline.
+  box.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+})();
+</script>
+</body>
+</html>
