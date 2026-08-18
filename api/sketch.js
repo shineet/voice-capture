@@ -19,7 +19,7 @@
 //
 // The OpenAI key stays here, server-side, same as transcribe.js.
 
-const { traceToStrokes } = require('../lib/trace.js');
+const { centerlineStrokes } = require('../lib/centerline.js');
 
 const MODEL = process.env.SKETCH_MODEL || 'gpt-4o';
 const IMAGE_MODEL = process.env.SKETCH_IMAGE_MODEL || 'gpt-image-1';
@@ -127,9 +127,10 @@ async function sketchByImage(word) {
   const b64 = data.data?.[0]?.b64_json;
   if (!b64) throw new Error('Image model returned no image');
   const buffer = Buffer.from(b64, 'base64');
-  // Trace the line art to strokes. threshold high-ish so only the solid black
-  // lines become ink; turdSize drops JPEG/edge speckle.
-  const strokes = await traceToStrokes(buffer, { threshold: 160, turdSize: 10 });
+  // Centreline-trace the line art to strokes: each drawn line becomes ONE pen
+  // stroke (outline tracing doubled every line, which looked like vector art,
+  // not a hand drawing).
+  const strokes = await centerlineStrokes(buffer);
   if (!strokes || !strokes.length) throw new Error('Trace produced no strokes');
   return strokes;
 }
