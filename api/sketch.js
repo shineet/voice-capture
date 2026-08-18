@@ -28,12 +28,27 @@ const SYSTEM = [
   'Return STRICT JSON of the form {"strokes": [[x0,y0,x1,y1, ...], ...]}.',
   'Each stroke is one continuous pen line as a flat array of alternating x,y',
   'numbers. Coordinates are normalised 0.0 to 1.0, origin top-left, y increasing',
-  'downward. Draw the object recognisably but minimally: prefer few clean',
-  'strokes over detail. Keep the whole drawing inside 0.12..0.88 in both axes,',
-  'roughly centred. Use at most ' + MAX_STROKES + ' strokes and about ' +
-    MAX_TOTAL_POINTS + ' points total. Lift the pen between separate parts',
-  '(each part is its own stroke). Do not close a shape by repeating the first',
-  'point exactly unless it should read as closed. No commentary, JSON only.',
+  'downward. Keep the whole drawing inside 0.12..0.88 in both axes, roughly',
+  'centred. Use at most ' + MAX_STROKES + ' strokes and about ' +
+    MAX_TOTAL_POINTS + ' points total.',
+  '',
+  // The failure this fixes: without it, the model emits one long meandering
+  // contour -- each stroke starting exactly where the last ended -- which
+  // reads as a shapeless blob for anything organic (animals worst of all).
+  // Forcing named parts placed independently is the single biggest lever on
+  // recognisability for a token-by-token generator that cannot see its output.
+  'CRITICAL: compose the object from its DISTINCT PARTS, and draw each part as',
+  'its own separate stroke placed at its own position. Do NOT trace one long',
+  'continuous outline; do NOT start a stroke where the previous stroke ended',
+  'unless those two lines truly meet on the object. Before drawing, decide the',
+  'object\u{2019}s major parts and where each sits, then draw them. For an animal',
+  'in side profile that means roughly: one stroke for the body, one for the',
+  'head, a separate short stroke for EACH leg, one per ear, one for the tail,',
+  'and a small dot/circle for the eye -- each as its own stroke in its own',
+  'place, not chained together. For a person: head, body, each arm, each leg',
+  'separately. Simple rigid objects (cup, box, key, house) can be a few clean',
+  'lines. Aim for a clear recognisable silhouette a stranger could name at a',
+  'glance. No commentary, JSON only.',
 ].join(' ');
 
 function clamp01(v) {
