@@ -105,6 +105,11 @@ const IMAGE_PROMPT = (word) =>
   + `fill, no colour, no background scenery, no text, no border. Just clear black `
   + `outlines of the ${word} so it is instantly recognisable.`;
 
+// Temporary: when the request carries { debugImage: true }, return the raw
+// generated PNG instead of strokes, so the tracer can be tuned against real
+// fixtures offline. Removed once tracing is dialled in.
+let WANT_DEBUG_IMAGE = false;
+
 async function sketchByImage(word) {
   const r = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
@@ -127,6 +132,7 @@ async function sketchByImage(word) {
   const b64 = data.data?.[0]?.b64_json;
   if (!b64) throw new Error('Image model returned no image');
   const buffer = Buffer.from(b64, 'base64');
+  if (WANT_DEBUG_IMAGE) return { __debugImage: b64 };
   // Centreline-trace the line art to strokes: each drawn line becomes ONE pen
   // stroke (outline tracing doubled every line, which looked like vector art,
   // not a hand drawing).
@@ -186,10 +192,13 @@ module.exports = async function handler(req, res) {
 
   // Try the good engine first; fall back to the fast one so the button never
   // dead-ends. `engine` in the reply says which one drew it.
+  WANT_DEBUG_IMAGE = !!(body && body.debugImage);
+
   if (USE_IMAGE) {
     try {
-      const strokes = await sketchByImage(word);
-      return res.status(200).json({ strokes, engine: 'image' });
+      const result = await sketchByImage(word);
+      if (result && result.__debugImage) return res.status(200).json({ image: result.__debugImage });
+      return res.status(200).json({ strokes: result, engine: 'image' });
     } catch (err) {
       console.error('sketch image engine failed, falling back to coordinates:', err.message);
     }
