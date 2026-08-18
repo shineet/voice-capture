@@ -39,7 +39,7 @@ module.exports = async function handler(req, res) {
     try {
       const { blobs } = await list({ prefix: PATH, limit: 1 });
       if (!blobs.length) return res.status(200).json({ word: '', id: 0 });
-      const r = await fetch(blobs[0].url + '?t=' + Date.now()); // dodge any CDN cache
+      const r = await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' }); // dodge any CDN cache
       const raw = r.ok ? (await r.text()).trim() : '';
       let parsed = {};
       try { parsed = JSON.parse(raw); } catch { /* ignore */ }
@@ -61,6 +61,11 @@ module.exports = async function handler(req, res) {
         contentType: 'application/json',
         addRandomSuffix: false,
         allowOverwrite: true,
+        // A mailbox is the opposite of a static file: Blob's default cache is a
+        // YEAR, so an overwritten word kept serving the stale copy from the CDN
+        // (the word appeared to send only on the second try, or after a long
+        // wait). 0 makes every read fresh.
+        cacheControlMaxAge: 0,
       });
       return res.status(200).json({ success: true, id });
     } catch (err) {
