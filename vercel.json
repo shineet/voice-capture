@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/transcribe",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
