@@ -1,0 +1,46 @@
+// api/voice-twiml.js
+// The call script Twilio runs when the phone app places a call. The app passes
+// `mode`: "voicemail" (first dial) or "divert" (second dial -> the assistant).
+// The number the audience dialed is cosmetic (shown in the app + CallKit); the
+// routing here is always to voicemail or the assistant, never the dialed number,
+// so no random stranger is ever called.
+//
+// The TwiML App's Voice Request URL must include ?k=<SMS_TOKEN> so only the
+// Twilio requests we configured are honored -- keeps the assistant's number from
+// leaking to anyone who probes the endpoint.
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function xml(res, body) {
+  res.setHeader('Content-Type', 'text/xml');
+  res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response>' + body + '</Response>');
+}
+
+module.exports = async function handler(req, res) {
+  if (req.method !== 'POST' && req.method !== 'GET') return res.status(405).send('Method not allowed');
+
+  const k = (req.query && req.query.k) || '';
+  if (process.env.SMS_TOKEN && k !== process.env.SMS_TOKEN) return res.status(403).send('Forbidden');
+
+  let body = req.body;
+  if (typeof body === 'string') { try { body = require('querystring').parse(body); } catch { body = {}; } }
+  const mode = (body && body.mode) || (req.query && req.query.mode) || 'voicemail';
+
+  if (mode === 'divert') {
+    const assistant = process.env.ASSISTANT_NUMBER;
+    const from = process.env.TWILIO_FROM;
+    if (!assistant) return xml(res, '<Say>Assistant number is not configured.</Say>');
+    // answerOnBridge -> the caller hears ringing until the assistant picks up.
+    return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(assistant) + '</Dial>');
+  }
+
+  // voicemail (first dial). A hosted recording if set, else a plain greeting.
+  if (process.env.VOICEMAIL_URL) {
+    return xml(res, '<Play>' + esc(process.env.VOICEMAIL_URL) + '</Play>');
+  }
+  return xml(res,
+    '<Say voice="alice">The person you are trying to reach is not available. '
+    + 'Please leave a message after the tone.</Say>'
+    + '<Pause length="1"/>');
+};
