@@ -32,7 +32,11 @@ module.exports = async function handler(req, res) {
     // (not hard-coded). ASSISTANT_NUMBER env is only an optional fallback.
     const raw = (body && body.assistant) || (req.query && req.query.assistant) || process.env.ASSISTANT_NUMBER || '';
     const assistant = /^\+?[0-9]{7,15}$/.test(String(raw).trim()) ? String(raw).trim() : '';
-    const from = process.env.TWILIO_FROM;
+    // Caller ID shown on the assistant's phone. Default = the Twilio number. If
+    // DIVERT_CALLER_ID is set to the performer's own VERIFIED number, the assistant
+    // sees the call as coming from the performer, so tapping FaceTime on the native
+    // call screen reaches the performer directly. Only the assistant sees this.
+    const from = process.env.DIVERT_CALLER_ID || process.env.TWILIO_FROM;
     if (!assistant) return xml(res, '<Say>Assistant number is not configured.</Say>');
     // answerOnBridge -> the caller hears ringing until the assistant picks up.
     return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(assistant) + '</Dial>');
