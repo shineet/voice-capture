@@ -59,6 +59,27 @@ module.exports = async function handler(req, res) {
           template: d.template.trim(),
           enabled: !!d.enabled,
         }));
+
+      // Guard against wiping the backup. A fresh install loads an empty list
+      // before it has synced from here; if it then saved, an empty POST used to
+      // overwrite the stored destinations and they were lost everywhere. Refuse
+      // to replace a non-empty stored list with an empty one unless the caller
+      // explicitly means it (allowEmpty:true for a genuine "clear all").
+      if (cleaned.length === 0 && !(req.body && req.body.allowEmpty)) {
+        try {
+          const { blobs } = await list({ prefix: PATHNAME, limit: 1 });
+          if (blobs.length) {
+            const r = await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' });
+            const raw = r.ok ? (await r.text()).trim() : '';
+            let stored = null; try { stored = JSON.parse(raw); } catch { /* ignore */ }
+            if (stored && Array.isArray(stored.destinations) && stored.destinations.length) {
+              // Keep the existing list; tell the client nothing was overwritten.
+              return res.status(200).json({ success: true, preserved: true });
+            }
+          }
+        } catch (_) { /* fall through to normal write */ }
+      }
+
       const primary = cleaned.find(d => d.enabled) || cleaned[0];
       payload = { value: primary ? primary.template : '', destinations: cleaned };
     } else if (typeof value === 'string' && value.trim()) {
