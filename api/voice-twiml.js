@@ -42,7 +42,14 @@ module.exports = async function handler(req, res) {
     return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(assistant) + '</Dial>');
   }
 
-  // voicemail (first dial). A hosted recording if set, else a plain greeting.
+  // voicemail (first dial). Priority: app-provided text (chosen per show) ->
+  // hosted recording (VOICEMAIL_URL env) -> default greeting.
+  const vmText = (body && body.vm) || (req.query && req.query.vm) || '';
+  const vmVoiceRaw = (body && body.vmvoice) || (req.query && req.query.vmvoice) || 'alice';
+  const vmVoice = /^[A-Za-z0-9.\-]+$/.test(String(vmVoiceRaw)) ? String(vmVoiceRaw) : 'alice';
+  if (vmText) {
+    return xml(res, '<Say voice="' + esc(vmVoice) + '">' + esc(vmText) + '</Say><Pause length="1"/>');
+  }
   if (process.env.VOICEMAIL_URL) {
     return xml(res, '<Play>' + esc(process.env.VOICEMAIL_URL) + '</Play>');
   }
