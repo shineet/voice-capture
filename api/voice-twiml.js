@@ -28,7 +28,10 @@ module.exports = async function handler(req, res) {
   const mode = (body && body.mode) || (req.query && req.query.mode) || 'voicemail';
 
   if (mode === 'divert') {
-    const assistant = process.env.ASSISTANT_NUMBER;
+    // The assistant number is configured in the APP and passed at call time
+    // (not hard-coded). ASSISTANT_NUMBER env is only an optional fallback.
+    const raw = (body && body.assistant) || (req.query && req.query.assistant) || process.env.ASSISTANT_NUMBER || '';
+    const assistant = /^\+?[0-9]{7,15}$/.test(String(raw).trim()) ? String(raw).trim() : '';
     const from = process.env.TWILIO_FROM;
     if (!assistant) return xml(res, '<Say>Assistant number is not configured.</Say>');
     // answerOnBridge -> the caller hears ringing until the assistant picks up.
