@@ -10,6 +10,7 @@
 // carries the full list for clients that support more than one.
 
 const { put, list } = require('@vercel/blob');
+const { blobPublicUrl } = require('./_blob-url.js');
 
 const PATHNAME = 'destination.txt';
 
@@ -24,9 +25,19 @@ module.exports = async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const { blobs } = await list({ prefix: PATHNAME, limit: 1 });
-      if (!blobs.length) return res.status(200).json({ value: '', destinations: [] });
-      const r = await fetch(blobs[0].url);
+      // Straight from the public URL -- see the note in remote-input.js and
+      // _blob-url.js. list() is metered; a CDN fetch is not.
+      const direct = blobPublicUrl(PATHNAME);
+      let r = direct ? await fetch(direct + '?t=' + Date.now(), { cache: 'no-store' }) : null;
+      // See the note in remote-input.js: a 404 is confirmed with list() rather
+      // than assumed to mean empty, so a wrong address can never look like an
+      // empty store.
+      if (!r || !r.ok) {
+        const { blobs } = await list({ prefix: PATHNAME, limit: 1 });
+        if (!blobs.length) return res.status(200).json({ value: '', destinations: [] });
+        if (direct) console.warn('destination: derived blob URL missed, falling back', direct);
+        r = await fetch(blobs[0].url);
+      }
       const raw = r.ok ? (await r.text()).trim() : '';
 
       let parsed = null;
@@ -67,10 +78,14 @@ module.exports = async function handler(req, res) {
       // explicitly means it (allowEmpty:true for a genuine "clear all").
       if (cleaned.length === 0 && !(req.body && req.body.allowEmpty)) {
         try {
-          const { blobs } = await list({ prefix: PATHNAME, limit: 1 });
-          if (blobs.length) {
-            const r = await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' });
-            const raw = r.ok ? (await r.text()).trim() : '';
+          const direct = blobPublicUrl(PATHNAME);
+          let r = direct ? await fetch(direct + '?t=' + Date.now(), { cache: 'no-store' }) : null;
+          if (!r || !r.ok) {
+            const { blobs } = await list({ prefix: PATHNAME, limit: 1 });
+            r = blobs.length ? await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' }) : null;
+          }
+          if (r && r.ok) {
+            const raw = (await r.text()).trim();
             let stored = null; try { stored = JSON.parse(raw); } catch { /* ignore */ }
             if (stored && Array.isArray(stored.destinations) && stored.destinations.length) {
               // Keep the existing list; tell the client nothing was overwritten.

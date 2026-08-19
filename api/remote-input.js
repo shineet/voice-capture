@@ -13,6 +13,7 @@
 // history and nothing sensitive is stored.
 
 const { put, list } = require('@vercel/blob');
+const { blobPublicUrl } = require('./_blob-url.js');
 
 function roomKey(raw) {
   return String(raw || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 64);
@@ -37,9 +38,25 @@ module.exports = async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const { blobs } = await list({ prefix: PATH, limit: 1 });
-      if (!blobs.length) return res.status(200).json({ word: '', id: 0 });
-      const r = await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' }); // dodge any CDN cache
+      // Read the mailbox straight from its public URL. list() used to run here
+      // on every poll, and it is a metered API call -- the app polls every few
+      // seconds during a show, which exhausted the monthly allowance and got
+      // the store paused. A CDN fetch is not metered. See _blob-url.js.
+      const direct = blobPublicUrl(PATH);
+      let r = direct ? await fetch(direct + '?t=' + Date.now(), { cache: 'no-store' }) : null;
+
+      // A 404 means one of two things -- nothing posted to this room yet, or a
+      // wrong address -- and they must not be confused. Treating 404 as "empty"
+      // would silently break the mailbox forever if the URL were ever wrong, so
+      // it is confirmed with list() instead. That costs a metered call only
+      // while the mailbox is empty; once a word is in it, every poll for the
+      // rest of the show is free, which is the case that ran up the bill.
+      if (!r || !r.ok) {
+        const { blobs } = await list({ prefix: PATH, limit: 1 });
+        if (!blobs.length) return res.status(200).json({ word: '', id: 0 });
+        if (direct) console.warn('remote-input: derived blob URL missed, falling back', direct);
+        r = await fetch(blobs[0].url + '?t=' + Date.now(), { cache: 'no-store' });
+      }
       const raw = r.ok ? (await r.text()).trim() : '';
       let parsed = {};
       try { parsed = JSON.parse(raw); } catch { /* ignore */ }
