@@ -59,8 +59,16 @@
   </main>
   <div id="nokey" hidden>This link is missing its code. Ask for the full link and open that one.</div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 (function () {
+  // Supabase project used purely as a realtime relay (Broadcast stores no
+  // data). Anon key is public by design. Filled in once the project exists;
+  // when blank, the page just posts to the mailbox and delivery falls back to
+  // the app's polling.
+  var SUPABASE_URL = "";
+  var SUPABASE_ANON = "";
+
   // The room token comes from the link Shine texts: ?room=... (or #room=...).
   function param(name) {
     var q = new URLSearchParams(location.search).get(name);
@@ -80,6 +88,17 @@
   var busy = false;
   var resetTimer = null;
 
+  // Open the realtime channel so a word is pushed to the app instantly. The
+  // mailbox POST still happens too, as a durable backup; the app de-dupes by id.
+  var channel = null;
+  if (SUPABASE_URL && SUPABASE_ANON && window.supabase) {
+    try {
+      var client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+      channel = client.channel('vc-' + room, { config: { broadcast: { ack: false } } });
+      channel.subscribe();
+    } catch (e) { channel = null; }
+  }
+
   function flash(text, cls) {
     send.textContent = text;
     send.className = cls || '';
@@ -93,11 +112,16 @@
     var word = box.value.trim();
     if (!word || busy) return;
     busy = true; send.disabled = true; status.textContent = 'Sending...';
+    var id = Date.now();
+    // Push instantly if the channel is up; harmless if it isn't.
+    if (channel) {
+      try { channel.send({ type: 'broadcast', event: 'word', payload: { word: word, id: id } }); } catch (e) {}
+    }
     try {
       var r = await fetch('/api/remote-input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room: room, word: word })
+        body: JSON.stringify({ room: room, word: word, id: id })
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       await r.json();

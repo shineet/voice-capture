@@ -54,7 +54,10 @@ module.exports = async function handler(req, res) {
     const word = (body && typeof body.word === 'string') ? body.word.trim() : '';
     if (!word) return res.status(400).json({ error: 'Missing word' });
     if (word.length > 200) return res.status(400).json({ error: 'Word too long' });
-    const id = Date.now();
+    // The page sends the same id on the realtime broadcast and this mailbox
+    // write, so the app can de-dupe across both channels. Fall back to now.
+    const clientId = Number(body && body.id);
+    const id = Number.isFinite(clientId) && clientId > 0 ? Math.floor(clientId) : Date.now();
     try {
       await put(PATH, JSON.stringify({ word, id }), {
         access: 'public',
