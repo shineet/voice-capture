@@ -8,42 +8,38 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Notes</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: dark; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #f6f6f4; color: #111;
+    background: #000; color: #6a6a6a;
     display: flex; flex-direction: column;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
-  @media (prefers-color-scheme: dark) {
-    body { background: #000; color: #f2f2f2; }
-    textarea { background: #0e0e0e !important; color: #f2f2f2 !important; }
-  }
-  header { padding: 14px 18px 4px; font-size: 15px; font-weight: 600; opacity: .55; }
+  header { padding: 14px 18px 4px; font-size: 13px; font-weight: 600; opacity: .3; }
   main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 6px 14px 14px; }
   textarea {
-    flex: 1; width: 100%; min-height: 0;
+    height: 40vh; flex: none; width: 100%;
     border: none; outline: none; resize: none;
-    background: #fff; color: #111;
-    border-radius: 14px; padding: 18px;
-    font-size: 30px; line-height: 1.25; font-weight: 500;
-    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    background: #0a0a0a; color: #c9c9c9;
+    border-radius: 12px; padding: 16px;
+    font-size: 24px; line-height: 1.25; font-weight: 500;
+    box-shadow: none;
   }
-  .bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .bar { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
   button {
-    flex: 1; border: none; border-radius: 14px;
-    padding: 20px; font-size: 21px; font-weight: 700;
-    background: #1e6fff; color: #fff;
+    flex: 1; border: none; border-radius: 12px;
+    padding: 16px; font-size: 18px; font-weight: 600;
+    background: #161616; color: #8a8a8a;
     transition: transform .05s ease, background .15s ease, opacity .15s ease;
   }
   button:active { transform: scale(.98); }
   button:disabled { opacity: .5; }
-  button.ok { background: #24a148; }
-  button.err { background: #d1382c; }
-  #status { min-height: 20px; margin: 10px 4px 0; font-size: 14px; opacity: .6; }
-  #nokey { padding: 24px 18px; font-size: 16px; line-height: 1.5; }
+  button.ok { background: #12331d; color: #79c692; }
+  button.err { background: #351512; color: #cf847c; }
+  #status { min-height: 18px; margin: 10px 4px 0; font-size: 13px; opacity: .35; }
+  #nokey { padding: 24px 18px; font-size: 15px; line-height: 1.5; color: #6a6a6a; }
 </style>
 </head>
 <body>
