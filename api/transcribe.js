@@ -45,6 +45,11 @@ module.exports = async function handler(req, res) {
   // Parsed straight off req.url since bodyParser is disabled (req.query isn't
   // guaranteed here); a plain substring check is enough for a single flag.
   const indianNames = /[?&]names=indian(?:&|$)/.test(req.url || '');
+  // Same idea for Song Mode captures (?songs=indian): seed Whisper with Indian-
+  // music context so a Bollywood/regional title spoken in the clip comes back
+  // closer to searchable rather than transliterated into something Spotify
+  // won't find. Separate flag from names so the two toggles are independent.
+  const indianSongs = /[?&]songs=indian(?:&|$)/.test(req.url || '');
   const rawBody = await readRawBody(req);
   if (rawBody.length === 0) return res.status(400).json({ error: 'Missing audio' });
 
@@ -95,9 +100,12 @@ module.exports = async function handler(req, res) {
     // With the Indian-names bias on, the prompt is seeded with example names
     // spanning regions/genders so Whisper spells the captured name the Indian
     // way rather than defaulting to a similar-sounding English word.
-    const whisperPrompt = indianNames
-      ? 'A single Indian name, spoken clearly. Examples: Aarav, Vivaan, Aditya, Arjun, Rohan, Karthik, Rahul, Sanjay, Vijay, Deepak, Rajesh, Suresh, Anil, Ravi, Nikhil, Pranav, Aryan, Ishaan, Krishna, Aakash, Priya, Ananya, Aishwarya, Divya, Meera, Kavya, Neha, Pooja, Sneha, Lakshmi, Anjali, Shreya, Riya, Nisha, Deepika, Swati, Radha, Sita, Fatima, Zoya.'
-      : 'A single word, name, or place, spoken clearly.';
+    let whisperPrompt = 'A single word, name, or place, spoken clearly.';
+    if (indianNames) {
+      whisperPrompt = 'A single Indian name, spoken clearly. Examples: Aarav, Vivaan, Aditya, Arjun, Rohan, Karthik, Rahul, Sanjay, Vijay, Deepak, Rajesh, Suresh, Anil, Ravi, Nikhil, Pranav, Aryan, Ishaan, Krishna, Aakash, Priya, Ananya, Aishwarya, Divya, Meera, Kavya, Neha, Pooja, Sneha, Lakshmi, Anjali, Shreya, Riya, Nisha, Deepika, Swati, Radha, Sita, Fatima, Zoya.';
+    } else if (indianSongs) {
+      whisperPrompt = 'A conversation about an Indian song -- Bollywood/film or regional (Hindi, Tamil, Telugu, Punjabi). Titles and singers such as Tum Hi Ho, Kal Ho Naa Ho, Chaiyya Chaiyya, Jai Ho, Kesariya, Arijit Singh, Shreya Ghoshal, Lata Mangeshkar, Kishore Kumar, A.R. Rahman may be mentioned.';
+    }
     form.append('prompt', whisperPrompt);
 
     const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {

@@ -19,13 +19,13 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not configured' });
   }
 
-  const { transcript } = req.body || {};
+  const { transcript, indian } = req.body || {};
   if (typeof transcript !== 'string' || !transcript.trim()) {
     return res.status(400).json({ error: 'Missing transcript' });
   }
 
   try {
-    const guess = await extractSongGuess(transcript.trim());
+    const guess = await extractSongGuess(transcript.trim(), indian === true);
     if (!guess || !guess.title) {
       return res.status(200).json({ error: 'No song identifiable in that transcript' });
     }
@@ -51,7 +51,30 @@ module.exports = async function handler(req, res) {
 // parsing free-form prose -- this is a server endpoint feeding a live
 // performance, not a chat UI, so the output needs to be reliably parseable,
 // not just readable.
-async function extractSongGuess(transcript) {
+async function extractSongGuess(transcript, indian) {
+  // With the Indian-songs bias on, the extractor is told the song is likely
+  // Indian (Bollywood/film or regional) and to lean toward playback singers,
+  // romanized titles, and the film name as artist context -- which is what
+  // actually makes the downstream Spotify search resolve a Hindi/Tamil/etc.
+  // title instead of missing. Off by default so it never skews a Western song.
+  const systemContent = indian
+    ? 'You extract the song being discussed in a conversation transcript. ' +
+      'The song is likely Indian -- a Bollywood/film song or a regional ' +
+      '(Hindi, Tamil, Telugu, Punjabi, etc.) song. The transcript is English ' +
+      'speech-to-text and may have mangled the title or artist. Use your ' +
+      'knowledge of Indian music to recover the actual song: give the ' +
+      'commonly-searchable romanized title, and for a film song set the ' +
+      'playback singer(s) as artist when you know them (e.g. Arijit Singh, ' +
+      'Shreya Ghoshal, Lata Mangeshkar, Kishore Kumar, Sonu Nigam, ' +
+      'A.R. Rahman, Neha Kakkar), otherwise the music director or film name. ' +
+      'Respond with ONLY a JSON object: {"title": string, "artist": string}. ' +
+      'If an artist is not identifiable, use "" for artist. ' +
+      'If no specific song is identifiable, respond with {"title": "", "artist": ""}.'
+    : 'You extract the song being discussed in a conversation transcript. ' +
+      'Respond with ONLY a JSON object: {"title": string, "artist": string}. ' +
+      'If an artist is not mentioned or you are not confident, use "" for artist. ' +
+      'If no specific song is identifiable, respond with {"title": "", "artist": ""}.';
+
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -62,14 +85,7 @@ async function extractSongGuess(transcript) {
       model: 'gpt-4o-mini',
       response_format: { type: 'json_object' },
       messages: [
-        {
-          role: 'system',
-          content:
-            'You extract the song being discussed in a conversation transcript. ' +
-            'Respond with ONLY a JSON object: {"title": string, "artist": string}. ' +
-            'If an artist is not mentioned or you are not confident, use "" for artist. ' +
-            'If no specific song is identifiable, respond with {"title": "", "artist": ""}.',
-        },
+        { role: 'system', content: systemContent },
         { role: 'user', content: transcript },
       ],
       temperature: 0,
