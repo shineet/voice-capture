@@ -37,6 +37,14 @@ module.exports = async function handler(req, res) {
   // which is the main lever available for cutting latency without touching
   // the Whisper call itself.
   const contentType = req.headers['content-type'] || '';
+  // Optional bias flag from the native app (?names=indian). When set, the
+  // Whisper prompt below is swapped for one seeded with example Indian names,
+  // which nudges the model toward spelling South-Asian names the way they're
+  // actually written instead of anglicizing them at the source. Off by
+  // default so it never hurts accuracy on Western names at non-Indian shows.
+  // Parsed straight off req.url since bodyParser is disabled (req.query isn't
+  // guaranteed here); a plain substring check is enough for a single flag.
+  const indianNames = /[?&]names=indian(?:&|$)/.test(req.url || '');
   const rawBody = await readRawBody(req);
   if (rawBody.length === 0) return res.status(400).json({ error: 'Missing audio' });
 
@@ -84,7 +92,13 @@ module.exports = async function handler(req, res) {
     form.append('language', 'en');
     // Short, single-word/name/place captures -- nudges the model toward not
     // padding output with filler or guessing at a longer phrase than was said.
-    form.append('prompt', 'A single word, name, or place, spoken clearly.');
+    // With the Indian-names bias on, the prompt is seeded with example names
+    // spanning regions/genders so Whisper spells the captured name the Indian
+    // way rather than defaulting to a similar-sounding English word.
+    const whisperPrompt = indianNames
+      ? 'A single Indian name, spoken clearly. Examples: Aarav, Vivaan, Aditya, Arjun, Rohan, Karthik, Rahul, Sanjay, Vijay, Deepak, Rajesh, Suresh, Anil, Ravi, Nikhil, Pranav, Aryan, Ishaan, Krishna, Aakash, Priya, Ananya, Aishwarya, Divya, Meera, Kavya, Neha, Pooja, Sneha, Lakshmi, Anjali, Shreya, Riya, Nisha, Deepika, Swati, Radha, Sita, Fatima, Zoya.'
+      : 'A single word, name, or place, spoken clearly.';
+    form.append('prompt', whisperPrompt);
 
     const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
