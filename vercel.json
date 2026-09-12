@@ -11,6 +11,9 @@
     },
     "api/scene-find.js": {
       "maxDuration": 60
+    },
+    "api/scene-plan.js": {
+      "maxDuration": 45
     }
   }
 }
