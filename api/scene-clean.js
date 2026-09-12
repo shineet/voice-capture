@@ -26,11 +26,23 @@ const PROMPT = [
   'Remove every letter, number, character and marking from inside the masked',
   'area, leaving the surface completely blank and empty.',
   '',
-  'Fill it with the same material that surrounds it, continuing its exact',
-  'colour, texture, grain, reflections, shadows and lighting so the result',
-  'looks like an untouched photograph of that object with nothing written on',
-  'it. Keep the edges, borders, screws, frame and any surrounding detail',
-  'exactly as they are.',
+  // The failure this line exists to stop: given a white Texas number plate with
+  // the characters masked, the model returned a blank BLACK plate. Structurally
+  // perfect and useless -- the car in the photograph now has a plate that is
+  // the wrong colour, which anybody zooming in would notice before they noticed
+  // anything else. It fills the hole convincingly and feels no obligation to
+  // match what it replaced unless told to.
+  'CRITICAL: the area you fill must be the SAME COLOUR, brightness and material',
+  'as the surface immediately surrounding it, inside the same object. If it is a',
+  'white licence plate, fill it white. If it is a painted wall, fill it that',
+  'exact shade of paint. Sample the colour from the parts of that same surface',
+  'that are still visible just outside the masked area and continue them. Do not',
+  'darken, lighten, tint or restyle it.',
+  '',
+  'Continue the material exactly: its texture, grain, reflections, shadows and',
+  'lighting, so the result looks like an untouched photograph of that object',
+  'with nothing ever written on it. Keep the edges, borders, screws, frame and',
+  'any surrounding detail exactly as they are.',
   '',
   'Do not add any text, numbers, symbols, logos, watermarks or decoration.',
   'Do not change anything outside the masked area.',
