@@ -8,6 +8,9 @@
     },
     "api/scene-clean.js": {
       "maxDuration": 120
+    },
+    "api/scene-find.js": {
+      "maxDuration": 60
     }
   }
 }
