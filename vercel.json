@@ -5,6 +5,9 @@
     },
     "api/scene-style.js": {
       "maxDuration": 60
+    },
+    "api/scene-clean.js": {
+      "maxDuration": 120
     }
   }
 }
