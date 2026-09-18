@@ -40,7 +40,13 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET are not configured' });
   }
 
-  const { transcript, indian } = req.body || {};
+  // The app sends the market it read from the listener's own Spotify profile.
+  // Defaulting to US rather than omitting it: an omitted market is what caused
+  // the silent no-op, and US is right for every tester so far. A wrong market
+  // fails loudly (no match) instead of silently (accepted, never plays).
+  const { transcript, indian, market } = req.body || {};
+  const mkt = (typeof market === 'string' && /^[A-Za-z]{2}$/.test(market))
+    ? market.toUpperCase() : 'US';
   if (typeof transcript !== 'string' || !transcript.trim()) {
     return res.status(400).json({ error: 'Missing transcript' });
   }
@@ -51,9 +57,19 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ error: 'No song identifiable in that transcript' });
     }
 
-    const track = await searchSpotifyTrack(guess.title, guess.artist);
+    const track = await searchSpotifyTrack(guess.title, guess.artist, mkt);
     if (!track) {
       return res.status(200).json({ error: `No Spotify match for "${guess.title}"${guess.artist ? ' by ' + guess.artist : ''}` });
+    }
+
+    // is_playable comes back only when a market was supplied, which is the
+    // other reason to always send one: it lets the app say WHY nothing played
+    // instead of reporting a successful request that did nothing.
+    if (track.is_playable === false) {
+      console.log('SPOTIFY-DIAG', JSON.stringify({
+        note: 'match found but NOT playable in market', market: mkt,
+        uri: track.uri, title: track.name,
+      }));
     }
 
     return res.status(200).json({
@@ -61,6 +77,8 @@ module.exports = async function handler(req, res) {
       artist: track.artists.map((a) => a.name).join(', '),
       spotifyUri: track.uri,
       spotifyUrl: track.external_urls && track.external_urls.spotify,
+      market: mkt,
+      playable: track.is_playable !== false,
     });
   } catch (err) {
     console.error('song resolve error:', err);
@@ -199,8 +217,15 @@ function similarity(a, b) {
   return 1 - prev[n] / Math.max(m, n);
 }
 
-async function spotifySearch(q, limit, token) {
-  const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=${limit}`;
+async function spotifySearch(q, limit, token, market) {
+  // The market is not a nicety. Searching WITHOUT it returns catalogue-wide
+  // track ids that may not be playable where the listener actually is, and
+  // Spotify does not refuse a play aimed at one -- it accepts the request and
+  // then loads nothing, leaving the player at is_playing=false with a null
+  // item. That is precisely the trace Greg kept producing. With a market,
+  // Spotify relinks to the id that IS playable for him.
+  const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=${limit}`
+    + (market ? `&market=${encodeURIComponent(market)}` : '');
   const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
@@ -229,20 +254,20 @@ const artistMatches = (track, artist) => {
 /// strict query stays first because it is what stops "same title, different
 /// artist" -- the ambiguity this endpoint exists to remove. Nothing that
 /// succeeds today changes; this only reaches cases that already returned null.
-async function searchSpotifyTrack(title, artist) {
+async function searchSpotifyTrack(title, artist, market) {
   const token = await getSpotifyToken();
   const wanted = normaliseTitle(title);
 
   // 1. Exact, field-scoped. Precision first.
   const strict = artist ? `track:${title} artist:${artist}` : title;
-  const exact = await spotifySearch(strict, 1, token);
+  const exact = await spotifySearch(strict, 1, token, market);
   if (exact[0]) return exact[0];
 
   // 2. Plain keywords. Spotify's own matcher is far more forgiving than a
   //    field query, and this is where most single-word mishearings recover.
   //    The artist is still CHECKED, just not used as a filter -- a loose search
   //    will happily hand back the right title by the wrong singer.
-  const loose = await spotifySearch([title, artist].filter(Boolean).join(' '), 10, token);
+  const loose = await spotifySearch([title, artist].filter(Boolean).join(' '), 10, token, market);
   const byArtist = loose.filter((t) => artistMatches(t, artist));
   if (byArtist[0]) return byArtist[0];
 
@@ -250,7 +275,7 @@ async function searchSpotifyTrack(title, artist) {
   //    turns "Librarian Girl" into "Liberian Girl": same artist, one letter
   //    out, and comparing the words directly finds what no query would.
   if (artist) {
-    const catalogue = await spotifySearch(`artist:${artist}`, 50, token);
+    const catalogue = await spotifySearch(`artist:${artist}`, 50, token, market);
     let best = null, bestScore = 0;
     for (const t of catalogue) {
       if (!artistMatches(t, artist)) continue;
