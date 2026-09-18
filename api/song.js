@@ -142,21 +142,108 @@ async function getSpotifyToken() {
   return cachedSpotifyToken;
 }
 
-async function searchSpotifyTrack(title, artist) {
-  const token = await getSpotifyToken();
-  // Structured query (track:/artist: fields) when an artist guess exists --
-  // meaningfully narrows results versus a loose keyword search, which is
-  // exactly the ambiguity (same title, different artist) this endpoint
-  // exists to avoid. Falls back to a plain title search when no artist was
-  // extracted at all, rather than search for artist:"" and getting nothing.
-  const q = artist ? `track:${title} artist:${artist}` : title;
-  const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=1`;
+// Comparable form of a title: lower case, no punctuation, no bracketed or
+// dashed suffix. Spotify's own titles carry a lot of those -- "Liberian Girl -
+// 2012 Remastered Version", "Song (feat. X)" -- and none of it is what anybody
+// said out loud.
+function normaliseTitle(t) {
+  return String(t || '')
+    .toLowerCase()
+    .split(' - ')[0]
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// How close two strings are, 0 to 1, by edit distance over the longer one.
+// Small and dependency-free on purpose: this file has no npm packages and the
+// strings are a few words long.
+function similarity(a, b) {
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = cur;
+  }
+  return 1 - prev[n] / Math.max(m, n);
+}
+
+async function spotifySearch(q, limit, token) {
+  const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=${limit}`;
   const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
     throw new Error(data.error?.message || 'Spotify search failed');
   }
   const data = await r.json();
-  const track = data.tracks?.items?.[0];
-  return track || null;
+  return data.tracks?.items || [];
+}
+
+const artistMatches = (track, artist) => {
+  if (!artist) return true;
+  const want = String(artist).toLowerCase();
+  return (track.artists || []).some((a) => {
+    const got = String(a.name || '').toLowerCase();
+    return got.includes(want) || want.includes(got) || similarity(got, want) >= 0.7;
+  });
+};
+
+/// Find the track, tolerating a misheard word.
+///
+/// Whisper gets one syllable wrong and the whole effect dies: "Liberian Girl"
+/// comes back as "Librarian Girl", `track:Librarian Girl` is a FIELD match, and
+/// a field match does not do near-misses. One search, no match, nothing played.
+///
+/// So: three tries, loosening only after the tighter one finds nothing. The
+/// strict query stays first because it is what stops "same title, different
+/// artist" -- the ambiguity this endpoint exists to remove. Nothing that
+/// succeeds today changes; this only reaches cases that already returned null.
+async function searchSpotifyTrack(title, artist) {
+  const token = await getSpotifyToken();
+  const wanted = normaliseTitle(title);
+
+  // 1. Exact, field-scoped. Precision first.
+  const strict = artist ? `track:${title} artist:${artist}` : title;
+  const exact = await spotifySearch(strict, 1, token);
+  if (exact[0]) return exact[0];
+
+  // 2. Plain keywords. Spotify's own matcher is far more forgiving than a
+  //    field query, and this is where most single-word mishearings recover.
+  //    The artist is still CHECKED, just not used as a filter -- a loose search
+  //    will happily hand back the right title by the wrong singer.
+  const loose = await spotifySearch([title, artist].filter(Boolean).join(' '), 10, token);
+  const byArtist = loose.filter((t) => artistMatches(t, artist));
+  if (byArtist[0]) return byArtist[0];
+
+  // 3. Everything by that artist, then the closest title. This is the one that
+  //    turns "Librarian Girl" into "Liberian Girl": same artist, one letter
+  //    out, and comparing the words directly finds what no query would.
+  if (artist) {
+    const catalogue = await spotifySearch(`artist:${artist}`, 50, token);
+    let best = null, bestScore = 0;
+    for (const t of catalogue) {
+      if (!artistMatches(t, artist)) continue;
+      const score = similarity(normaliseTitle(t.name), wanted);
+      if (score > bestScore) { best = t; bestScore = score; }
+    }
+    // 0.62 keeps "librarian girl" -> "liberian girl" (0.86) and rejects a
+    // different song by the same artist, which would be worse than failing:
+    // a wrong track plays confidently and nobody knows why.
+    if (best && bestScore >= 0.62) return best;
+  }
+
+  // 4. Last try, unfiltered, for when the ARTIST was the misheard part.
+  if (loose[0] && similarity(normaliseTitle(loose[0].name), wanted) >= 0.62) return loose[0];
+
+  return null;
 }
