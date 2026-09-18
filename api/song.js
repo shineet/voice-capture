@@ -13,6 +13,27 @@
 // the destination app would still have to disambiguate itself.
 
 module.exports = async function handler(req, res) {
+  // ── Diagnostic sink ────────────────────────────────────────────────────────
+  // A POST carrying `diag` is not a song lookup. It is the app reporting what
+  // actually happened on a Spotify playback attempt, so a fault can be read
+  // here instead of relayed through a tester one sentence at a time.
+  //
+  // HERE rather than in its own api/ file because this project is at the
+  // twelve-function Vercel Hobby cap, same as shine-booking. No database on
+  // this backend either, so it goes to the runtime log -- which on Hobby is
+  // kept for ONE HOUR. Read it promptly or it is gone.
+  //
+  // Deliberately carries no token and no credential; it is device names, track
+  // ids and HTTP results.
+  if (req.method === 'POST') {
+    let b = req.body;
+    if (typeof b === 'string') { try { b = JSON.parse(b); } catch { b = null; } }
+    if (b && b.diag) {
+      console.log('SPOTIFY-DIAG ' + JSON.stringify(b.diag).slice(0, 4000));
+      return res.status(200).json({ logged: true });
+    }
+  }
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
