@@ -50,6 +50,14 @@ module.exports = async function handler(req, res) {
   // closer to searchable rather than transliterated into something Spotify
   // won't find. Separate flag from names so the two toggles are independent.
   const indianSongs = /[?&]songs=indian(?:&|$)/.test(req.url || '');
+  // Song Mode WITHOUT the Indian bias. This flag existed only in its Indian
+  // form, so a conversation about a Western song fell through to the default
+  // prompt below -- which tells Whisper to expect "a single word, name, or
+  // place" while the performer talks for several sentences. Whisper takes that
+  // literally and trims toward one short phrase, on exactly the songs this
+  // effect is used for most. Any songs= value that is not `indian` means a
+  // song conversation with no regional bias.
+  const anySongs = !indianSongs && /[?&]songs=(?:&|$)|[?&]songs=[^&]+/.test(req.url || '');
   const rawBody = await readRawBody(req);
   if (rawBody.length === 0) return res.status(400).json({ error: 'Missing audio' });
 
@@ -103,6 +111,15 @@ module.exports = async function handler(req, res) {
     let whisperPrompt = 'A single word, name, or place, spoken clearly.';
     if (indianNames) {
       whisperPrompt = 'A single Indian name, spoken clearly. Examples: Aarav, Vivaan, Aditya, Arjun, Rohan, Karthik, Rahul, Sanjay, Vijay, Deepak, Rajesh, Suresh, Anil, Ravi, Nikhil, Pranav, Aryan, Ishaan, Krishna, Aakash, Priya, Ananya, Aishwarya, Divya, Meera, Kavya, Neha, Pooja, Sneha, Lakshmi, Anjali, Shreya, Riya, Nisha, Deepika, Swati, Radha, Sita, Fatima, Zoya.';
+    } else if (anySongs) {
+      // Deliberately names no specific songs. The Indian prompt lists titles
+      // because romanized spelling needs anchoring; here the only thing worth
+      // correcting is the SHAPE of the audio -- conversational speech rather
+      // than one word -- and listing example songs would bias Whisper toward
+      // hearing those instead of what was actually said.
+      whisperPrompt = 'A conversation in which a song is mentioned, usually by '
+        + 'title and often by the artist who performs it. Ordinary spoken '
+        + 'English, several sentences long.';
     } else if (indianSongs) {
       whisperPrompt = 'A conversation about an Indian song -- Bollywood/film or regional (Hindi, Tamil, Telugu, Punjabi). Titles and singers such as Tum Hi Ho, Kal Ho Naa Ho, Chaiyya Chaiyya, Jai Ho, Kesariya, Arijit Singh, Shreya Ghoshal, Lata Mangeshkar, Kishore Kumar, A.R. Rahman may be mentioned.';
     }
