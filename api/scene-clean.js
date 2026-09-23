@@ -89,24 +89,28 @@ module.exports = async (req, res) => {
     }
 
     if (!image) return res.status(400).json({ error: 'No image' });
-    if (!mask) return res.status(400).json({ error: 'No mask' });
+
+    const editPrompt = body && body.editPrompt ? String(body.editPrompt) : null;
+    const imgType = (body && body.imageType) ? String(body.imageType) : 'image/png';
+    // An edit prompt (change the plate number, keep everything else) works on
+    // the WHOLE photo with no mask -- the localised instruction is in the prompt
+    // -- so the model changes only the plate. The erase path still needs a mask.
+    if (!editPrompt && !mask) return res.status(400).json({ error: 'No mask' });
 
     const form = new FormData();
     form.append('model', MODEL);
-    form.append('prompt', PROMPT);
+    form.append('prompt', editPrompt || PROMPT);
     form.append('n', '1');
-    // Square, matching what the app sends. Asking for a different shape here
-    // would have the model letterbox or crop the surface, and the app composites
-    // the result straight back into the original photo by position -- so a
-    // shifted crop would land the clean plate slightly off the real one.
-    form.append('size', '1024x1024');
-    form.append('image', new Blob([Buffer.from(image, 'base64')], { type: 'image/png' }),
-                'image.png');
-    // Transparent where the model may paint. The app cuts the hole, because it
-    // is the side that knows where the four corners are and has something to
-    // draw them with.
-    form.append('mask', new Blob([Buffer.from(mask, 'base64')], { type: 'image/png' }),
-                'mask.png');
+    // For a full-photo edit, 'auto' lets the model keep the input's aspect so
+    // the scene is not letterboxed or cropped. The erase path sends a square
+    // crop and wants a square back.
+    form.append('size', editPrompt ? (genSize || 'auto') : '1024x1024');
+    form.append('image', new Blob([Buffer.from(image, 'base64')], { type: imgType }),
+                imgType === 'image/jpeg' ? 'image.jpg' : 'image.png');
+    if (mask) {
+      form.append('mask', new Blob([Buffer.from(mask, 'base64')], { type: 'image/png' }),
+                  'mask.png');
+    }
 
     const r = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
