@@ -57,7 +57,37 @@ module.exports = async (req, res) => {
   try {
     let body = req.body;
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = null; } }
-    const { image, mask } = body || {};
+    const { image, mask, prompt: genPrompt, size: genSize } = body || {};
+
+    // Generation branch, folded in here rather than as its own endpoint because
+    // the project is at Vercel Hobby's 12-function cap. Given a text prompt and
+    // no source image, generate a fresh scene from scratch -- used to make the
+    // ready-made reveal templates whose surface (a plate, a plaque) is flat and
+    // standard-font, so both the erase and the live number are seamless.
+    if (genPrompt && !image) {
+      const gr = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          prompt: genPrompt,
+          n: 1,
+          size: genSize || '1536x1024',
+        }),
+      });
+      if (!gr.ok) {
+        const text = await gr.text().catch(() => '');
+        return res.status(502).json({ error: `Image generation failed (${gr.status}): ${text.slice(0, 300)}` });
+      }
+      const gjson = await gr.json();
+      const gb64 = gjson?.data?.[0]?.b64_json;
+      if (!gb64) return res.status(502).json({ error: 'No image came back' });
+      return res.json({ image: gb64 });
+    }
+
     if (!image) return res.status(400).json({ error: 'No image' });
     if (!mask) return res.status(400).json({ error: 'No mask' });
 
