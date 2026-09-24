@@ -21,13 +21,101 @@ function readRawBody(req) {
   });
 }
 
+// ElevenLabs, folded into this endpoint rather than its own file: Vercel Hobby
+// caps a project at 12 serverless functions and api/ is already at 12, so a
+// 13th breaks the whole deploy. This is the voice endpoint (voice in, and now
+// voice out), so text-to-speech lives here.
+//
+//   GET  ?voices=1        -> { voices: [{ id, name, category }] }  (the picker)
+//   POST ?tts=1  JSON { text, voiceId, modelId? }  -> audio/mpeg bytes
+//
+// The ElevenLabs key stays server-side (env ELEVENLABS_API_KEY), never on the
+// device, the same way OPENAI_API_KEY does.
+
+async function listElevenLabsVoices(res) {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    return res.status(500).json({ error: 'ELEVENLABS_API_KEY is not configured' });
+  }
+  try {
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      return res.status(502).json({ error: data.detail?.message || 'Could not list voices' });
+    }
+    const data = await r.json();
+    const voices = (data.voices || []).map((v) => ({
+      id: v.voice_id, name: v.name, category: v.category || '',
+    }));
+    return res.status(200).json({ voices });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function elevenLabsTTS(req, res) {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    return res.status(500).json({ error: 'ELEVENLABS_API_KEY is not configured' });
+  }
+  const rawBody = await readRawBody(req);
+  let parsed;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+  const text = (parsed && parsed.text || '').toString().trim();
+  const voiceId = (parsed && parsed.voiceId || '').toString().trim();
+  // Multilingual v2 by default: good quality and handles non-English names
+  // (which this is often used for) without extra config.
+  const modelId = (parsed && parsed.modelId || 'eleven_multilingual_v2').toString();
+  if (!text) return res.status(400).json({ error: 'Missing text' });
+  if (!voiceId) return res.status(400).json({ error: 'Missing voiceId' });
+  try {
+    const r = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({ text, model_id: modelId }),
+      }
+    );
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      const msg = data.detail?.message || data.detail || 'Speech generation failed';
+      console.error('ElevenLabs error:', msg);
+      return res.status(502).json({ error: typeof msg === 'string' ? msg : 'Speech generation failed' });
+    }
+    const audio = Buffer.from(await r.arrayBuffer());
+    res.setHeader('Content-Type', 'audio/mpeg');
+    return res.status(200).send(audio);
+  } catch (err) {
+    console.error('tts error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 module.exports = async function handler(req, res) {
+  const url = req.url || '';
+
+  // ElevenLabs voice list for the Mental Voice picker.
+  if (req.method === 'GET' && /[?&]voices=/.test(url)) return listElevenLabsVoices(res);
+
   // Keep-warm ping (see vercel.json cron) -- hits this function on a timer so
   // Vercel doesn't cold-start a fresh container on the first real capture of
   // a show, without spending anything on an actual Whisper call.
   if (req.method === 'GET') return res.status(200).json({ status: 'warm' });
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // ElevenLabs text-to-speech for a Mental Voice dynamic clip.
+  if (/[?&]tts=/.test(url)) return elevenLabsTTS(req, res);
+
   if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
 
   // Two request shapes share this endpoint: the web app posts JSON with a
