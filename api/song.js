@@ -50,6 +50,29 @@ module.exports = async function handler(req, res) {
     // but it needs an account, a key, and a key rotation story, and OPENAI_API
     // _KEY is already here. If the answers disappoint, TMDB is the upgrade and
     // this function is where it goes.
+    // ── Keypad digits -> the name they spell ─────────────────────────────────
+    // POST { t9: "77492" } -> { names: [ "Priya", ... ] }
+    //
+    // Only reached when the app's own bundled lists have already missed. The
+    // offline path handles the common names instantly and without a signal;
+    // this exists for Siobhan, Anushka, Kwame and everyone else no bundled
+    // list of eight hundred names was ever going to contain.
+    //
+    // The digits constrain the answer hard, which is what makes a model
+    // trustworthy here: it is not inventing a name, it is being asked which
+    // real names fit a pattern that admits very few.
+    if (b && typeof b.t9 === 'string' && /^[2-9]+$/.test(b.t9.trim())) {
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+      }
+      try {
+        const names = await namesForKeypad(b.t9.trim());
+        return res.status(200).json({ names });
+      } catch (e) {
+        return res.status(200).json({ error: String(e && e.message ? e.message : e) });
+      }
+    }
+
     if (b && typeof b.famousFor === 'string' && b.famousFor.trim()) {
       if (!process.env.OPENAI_API_KEY) {
         return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
@@ -373,4 +396,67 @@ async function bestKnownWork(name) {
     ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim()).slice(0, 2)
     : [];
   return { title, kind: parsed.kind === 'tv' ? 'tv' : 'film', alternates };
+}
+
+// Which real first names a keypad sequence spells.
+//
+// The letters under the keys are given to the model rather than assumed,
+// and the length is stated, because both are the constraints that stop it
+// answering with a name that does not actually fit. Verified again here
+// afterwards: a model that returns a name of the wrong length has answered a
+// different question, and passing that through would put a wrong name in
+// front of a room.
+async function namesForKeypad(digits) {
+  const KEYS = { 2: 'ABC', 3: 'DEF', 4: 'GHI', 5: 'JKL', 6: 'MNO', 7: 'PQRS', 8: 'TUV', 9: 'WXYZ' };
+  const spelled = digits.split('').map((d) => `${d}=${KEYS[d]}`).join(' ');
+  const body = {
+    model: process.env.FAMOUS_MODEL || 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'A phone keypad spells letters: ' + spelled + '. ' +
+          'Given a digit sequence, list real human FIRST NAMES of exactly that length whose letters ' +
+          'match key by key. Any culture. Common names first. Answer JSON only: {"names": [string]}. ' +
+          'At most five. If nothing real fits, answer {"names": []}. Never invent a name.',
+      },
+      { role: 'user', content: `${digits} (${digits.length} letters)` },
+    ],
+  };
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`OpenAI ${r.status}`);
+  const json = await r.json();
+  let parsed = {};
+  try { parsed = JSON.parse(json.choices[0].message.content); } catch { parsed = {}; }
+  const raw = Array.isArray(parsed.names) ? parsed.names : [];
+
+  // Checked against the keypad here, not taken on trust. A name of the wrong
+  // length, or one whose letters do not map back to these digits, is an answer
+  // to some other question.
+  const keyFor = {};
+  for (const [digit, letters] of Object.entries(KEYS)) {
+    for (const letter of letters) keyFor[letter] = digit;
+  }
+  const fits = (name) => {
+    const up = String(name || '').trim().toUpperCase();
+    if (up.length !== digits.length) return false;
+    for (let i = 0; i < up.length; i += 1) {
+      if (keyFor[up[i]] !== digits[i]) return false;
+    }
+    return true;
+  };
+  return raw
+    .filter(fits)
+    .map((n) => String(n).trim())
+    .map((n) => n[0].toUpperCase() + n.slice(1).toLowerCase())
+    .slice(0, 5);
 }
