@@ -430,7 +430,10 @@ async function namesForKeypad(digits) {
     .map((d, i) => `letter ${i + 1} is one of ${KEYS[d].split('').join('/')}`)
     .join(', ');
   const body = {
-    model: process.env.FAMOUS_MODEL || 'gpt-4o-mini',
+    // A stronger model than the film lookup uses, deliberately. This is
+    // per-character constraint work, which mini demonstrably cannot do: it
+    // answered Sandy for Priya's digits, then nothing at all.
+    model: process.env.T9_MODEL || 'gpt-4o',
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
