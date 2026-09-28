@@ -32,6 +32,38 @@ module.exports = async function handler(req, res) {
       console.log('SPOTIFY-DIAG ' + JSON.stringify(b.diag).slice(0, 4000));
       return res.status(200).json({ logged: true });
     }
+
+    // ── Celebrity -> the thing they are best known for ───────────────────────
+    // POST { famousFor: "Tom Cruise" } -> { title, kind, alternates: [] }
+    //
+    // HERE rather than in api/famous.js for the same reason the diagnostic
+    // sink above is here: this project sits on exactly twelve functions and
+    // Vercel Hobby allows twelve. A thirteenth file does not fail at runtime,
+    // it fails the BUILD, and takes the working endpoints down with it.
+    //
+    // It belongs here anyway. This file already means "a rough human phrase
+    // in, one authoritative title out, the credential staying server-side",
+    // which is the whole job.
+    //
+    // No TMDB. The obvious source for this is TMDB's known_for, which is
+    // ranked by real popularity rather than by a model's impression of it --
+    // but it needs an account, a key, and a key rotation story, and OPENAI_API
+    // _KEY is already here. If the answers disappoint, TMDB is the upgrade and
+    // this function is where it goes.
+    if (b && typeof b.famousFor === 'string' && b.famousFor.trim()) {
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+      }
+      try {
+        const found = await bestKnownWork(b.famousFor.trim());
+        if (!found || !found.title) {
+          return res.status(200).json({ error: `Nothing found for "${b.famousFor.trim()}"` });
+        }
+        return res.status(200).json(found);
+      } catch (e) {
+        return res.status(200).json({ error: String(e && e.message ? e.message : e) });
+      }
+    }
   }
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -292,4 +324,53 @@ async function searchSpotifyTrack(title, artist, market) {
   if (loose[0] && similarity(normaliseTitle(loose[0].name), wanted) >= 0.62) return loose[0];
 
   return null;
+}
+
+// One name in, the work they are best known for out.
+//
+// ALTERNATES ARE RETURNED, not just the winner, and that is deliberate. "Best
+// known" is genuinely arguable for a lot of people -- Tom Cruise is Top Gun to
+// one room and Mission: Impossible to the next -- so the app is given the
+// runners-up to fall back on, the same way a handwriting recogniser hands over
+// its other candidates instead of insisting on the first.
+//
+// Asked for the single most POPULAR rather than the best or the most
+// acclaimed: a spectator naming a celebrity is thinking of the famous one, not
+// the one that won things.
+async function bestKnownWork(name) {
+  const body = {
+    model: process.env.FAMOUS_MODEL || 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You name the single film or television show a person is MOST FAMOUS for. ' +
+          'Most popular and most widely recognised, not most acclaimed and not most recent. ' +
+          'Answer JSON only: {"title": string, "kind": "film"|"tv", "alternates": [string, string]}. ' +
+          'title is the work\'s common name with no year and no subtitle unless the subtitle is how ' +
+          'everyone says it. alternates are the next two best-known works, most famous first. ' +
+          'If the name is not a real public figure, or you are not confident, answer {"title": ""}.',
+      },
+      { role: 'user', content: name },
+    ],
+  };
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`OpenAI ${r.status}`);
+  const json = await r.json();
+  let parsed = {};
+  try { parsed = JSON.parse(json.choices[0].message.content); } catch { parsed = {}; }
+  const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+  const alternates = Array.isArray(parsed.alternates)
+    ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim()).slice(0, 2)
+    : [];
+  return { title, kind: parsed.kind === 'tv' ? 'tv' : 'film', alternates };
 }
