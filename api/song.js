@@ -66,8 +66,14 @@ module.exports = async function handler(req, res) {
         return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
       }
       try {
-        const names = await namesForKeypad(b.t9.trim());
-        return res.status(200).json({ names });
+        const found = await namesForKeypad(b.t9.trim());
+        // `debug` returns what the model actually said alongside what survived
+        // verification. Without it a rejected answer and an empty answer look
+        // identical from the outside, which is a whole deploy wasted guessing
+        // which one happened.
+        return res.status(200).json(
+          b.debug ? found : { names: found.names }
+        );
       } catch (e) {
         return res.status(200).json({ error: String(e && e.message ? e.message : e) });
       }
@@ -454,9 +460,10 @@ async function namesForKeypad(digits) {
     }
     return true;
   };
-  return raw
+  const names = raw
     .filter(fits)
     .map((n) => String(n).trim())
     .map((n) => n[0].toUpperCase() + n.slice(1).toLowerCase())
     .slice(0, 5);
+  return { names, raw, spelled };
 }
