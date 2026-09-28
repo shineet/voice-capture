@@ -414,7 +414,21 @@ async function bestKnownWork(name) {
 // front of a room.
 async function namesForKeypad(digits) {
   const KEYS = { 2: 'ABC', 3: 'DEF', 4: 'GHI', 5: 'JKL', 6: 'MNO', 7: 'PQRS', 8: 'TUV', 9: 'WXYZ' };
-  const spelled = digits.split('').map((d) => `${d}=${KEYS[d]}`).join(' ');
+  // Stated PER POSITION, not as a legend.
+  //
+  // The first version handed over "7=PQRS 7=PQRS 4=GHI 9=WXYZ 2=ABC" and asked
+  // for names matching it. For 77492 -- Priya -- it answered "Sandy", three
+  // times, which spells 72639. Applying a key map letter by letter is exactly
+  // the kind of mechanical character work these models are worst at, and a
+  // legend leaves the applying to them.
+  //
+  // Naming the allowed letters at each position turns it from a mapping task
+  // into a constraint-satisfaction one, which is a question a language model
+  // can actually answer.
+  const spelled = digits
+    .split('')
+    .map((d, i) => `letter ${i + 1} is one of ${KEYS[d].split('').join('/')}`)
+    .join(', ');
   const body = {
     model: process.env.FAMOUS_MODEL || 'gpt-4o-mini',
     temperature: 0,
@@ -423,12 +437,12 @@ async function namesForKeypad(digits) {
       {
         role: 'system',
         content:
-          'A phone keypad spells letters: ' + spelled + '. ' +
-          'Given a digit sequence, list real human FIRST NAMES of exactly that length whose letters ' +
-          'match key by key. Any culture. Common names first. Answer JSON only: {"names": [string]}. ' +
-          'At most five. If nothing real fits, answer {"names": []}. Never invent a name.',
+          `List real human FIRST NAMES of exactly ${digits.length} letters where ${spelled}. ` +
+          'Any culture, any origin. Check each letter against its rule before answering. ' +
+          'Most common names first. Answer JSON only: {"names": [string]}. At most five. ' +
+          'If nothing real fits every rule, answer {"names": []}. Never invent a name.',
       },
-      { role: 'user', content: `${digits} (${digits.length} letters)` },
+      { role: 'user', content: spelled },
     ],
   };
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
