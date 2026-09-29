@@ -93,6 +93,42 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({ error: String(e && e.message ? e.message : e) });
       }
     }
+    // ── A song title -> the YouTube video that IS that song ────────────────
+    // POST { youtube: "Yesterday The Beatles" }
+    //   -> { videoId, title, channel, alternates: [{ videoId, title, channel }] }
+    //
+    // Fourth mode in this file, same twelve-function reason as the three above.
+    //
+    // A search URL was the obvious shortcut and is the wrong thing entirely:
+    // youtube.com/results?search_query=... lands on a LIST, and a spectator
+    // holding their own phone is then looking at search results with the song
+    // they named sitting in them, which reads as a search having been typed.
+    // Only a /watch?v= URL opens the app already playing, which is the effect.
+    //
+    // Asking a model for the video id is the "Sandy for 77492" failure again:
+    // an eleven-character opaque id is exactly the kind of string a model will
+    // produce confidently and wrongly, and a wrong id is a 404 in the
+    // spectator's hand. So this is a real search against YouTube's own index,
+    // and what comes back is a video that certainly exists.
+    //
+    // Alternates ride along because the search returns five results for the
+    // same 100 quota units as one. The first hit is nearly always the official
+    // video; when it is a cover or a lyric video, having the next four already
+    // in hand is the difference between choosing again and starting over.
+    if (b && typeof b.youtube === 'string' && b.youtube.trim()) {
+      if (!process.env.YOUTUBE_API_KEY) {
+        return res.status(500).json({ error: 'YOUTUBE_API_KEY is not configured' });
+      }
+      try {
+        const found = await youtubeSearch(b.youtube.trim());
+        if (!found || !found.videoId) {
+          return res.status(200).json({ error: `Nothing on YouTube for "${b.youtube.trim()}"` });
+        }
+        return res.status(200).json(found);
+      } catch (e) {
+        return res.status(200).json({ error: String(e && e.message ? e.message : e) });
+      }
+    }
   }
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -483,4 +519,66 @@ async function namesForKeypad(digits) {
     .map((n) => n[0].toUpperCase() + n.slice(1).toLowerCase())
     .slice(0, 5);
   return { names, raw, spelled };
+}
+
+
+// ── YouTube search ────────────────────────────────────────────────────
+// One search.list call: 100 quota units out of a free 10,000 a day, so about a
+// hundred reveals daily at no cost, and the quota resets at midnight Pacific.
+//
+// The key is restricted to this one API, so a leak costs the quota and nothing
+// else. It never reaches the browser: the phone asks this endpoint, this
+// endpoint asks Google.
+async function youtubeSearch(query) {
+  const url = 'https://www.googleapis.com/youtube/v3/search'
+    + '?part=snippet'
+    + '&type=video'           // a channel or a playlist has no /watch?v= to open
+    + '&maxResults=5'
+    + '&q=' + encodeURIComponent(query)
+    + '&key=' + encodeURIComponent(process.env.YOUTUBE_API_KEY);
+
+  const r = await fetch(url);
+  const data = await r.json().catch(() => null);
+
+  if (!r.ok) {
+    // Google states the reason in a shape worth surfacing verbatim: a quota
+    // error and a bad key read identically as "it did not work" otherwise, and
+    // they need opposite fixes.
+    const reason = data && data.error && data.error.errors && data.error.errors[0]
+      ? data.error.errors[0].reason : '';
+    const message = data && data.error ? data.error.message : ('HTTP ' + r.status);
+    if (reason === 'quotaExceeded') {
+      return { error: 'YouTube daily search quota is used up. It resets at midnight Pacific.' };
+    }
+    return { error: 'YouTube: ' + message };
+  }
+
+  const items = (data && Array.isArray(data.items) ? data.items : [])
+    .filter((it) => it && it.id && it.id.videoId)
+    .map((it) => ({
+      videoId: it.id.videoId,
+      // YouTube titles carry HTML entities (&amp;, &#39;) because the API
+      // returns them ready for a web page. This value is shown in the app and
+      // spoken about out loud, so they have to come out.
+      title: decodeEntities(String((it.snippet && it.snippet.title) || '')),
+      channel: decodeEntities(String((it.snippet && it.snippet.channelTitle) || '')),
+    }));
+
+  if (!items.length) return { videoId: '', title: '', channel: '', alternates: [] };
+
+  return {
+    videoId: items[0].videoId,
+    title: items[0].title,
+    channel: items[0].channel,
+    alternates: items.slice(1),
+  };
+}
+
+function decodeEntities(s) {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
 }
