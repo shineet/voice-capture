@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ready</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100dvh; background: #000; color: #fff;
+    font: 17px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; padding: 28px; text-align: center; -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size: 21px; margin: 0; font-weight: 600; }
+  #count { font-size: 64px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .note { color: #8b8b93; font-size: 14px; max-width: 30ch; }
+  .row { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 320px; }
+  button {
+    appearance: none; border: 0; border-radius: 13px; padding: 15px 18px;
+    font: inherit; font-weight: 600; background: #1f1f24; color: #fff;
+  }
+  button.primary { background: #0a84ff; }
+  code { color: #6ea8fe; font-size: 13px; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1 id="title">Opening a video</h1>
+<div id="count">5</div>
+<p class="note" id="what"></p>
+
+<div class="row">
+  <button class="primary" id="tap">Open it now (with a tap)</button>
+  <button id="app">Try the youtube:// app link</button>
+  <button id="music">Try music.youtube.com</button>
+</div>
+
+<p class="note">
+  This page is a test of ONE thing: whether a page can open a YouTube video by
+  itself, with nobody touching the screen, and whether it lands in the YouTube
+  app playing or in Safari paused.
+</p>
+<p class="note"><code id="target"></code></p>
+
+<script>
+  // A video nobody will mistake for anything else, so "is it playing" needs no
+  // squinting. Swap the id in the URL with ?v=SOMETHING_ELSE to try another.
+  var params = new URLSearchParams(location.search);
+  var id = params.get('v') || 'dQw4w9WgXcQ';
+  var seconds = parseInt(params.get('wait') || '5', 10);
+
+  var web = 'https://www.youtube.com/watch?v=' + id;
+  var app = 'youtube://watch?v=' + id;
+  var music = 'https://music.youtube.com/watch?v=' + id;
+
+  document.getElementById('target').textContent = web;
+  document.getElementById('what').textContent =
+    'In ' + seconds + ' seconds this page will navigate on its own, with no tap. '
+    + 'That is exactly what a reveal arriving over the air would do.';
+
+  document.getElementById('tap').onclick = function () { location.href = web; };
+  document.getElementById('app').onclick = function () { location.href = app; };
+  document.getElementById('music').onclick = function () { location.href = music; };
+
+  // The real test. No gesture anywhere in this call stack, which is the whole
+  // point: a message arriving over a websocket is not a tap, and iOS knows the
+  // difference.
+  var left = seconds;
+  var counter = document.getElementById('count');
+  var tick = setInterval(function () {
+    left -= 1;
+    counter.textContent = left > 0 ? left : 'now';
+    if (left <= 0) {
+      clearInterval(tick);
+      document.getElementById('title').textContent = 'Navigating';
+      location.href = web;
+    }
+  }, 1000);
+</script>
+
+</body>
+</html>
