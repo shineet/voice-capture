@@ -33,6 +33,39 @@ module.exports = async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  // ── Video, for the FaceTime leg on a borrowed phone ────────────────────
+  //
+  // The routine ends with the assistant calling back on FaceTime, and on a
+  // spectator's phone that is impossible: the assistant has no handle to reach
+  // it, the disguise depends on renaming a contact in the PERFORMER'S address
+  // book, and Safari cannot receive FaceTime at all. So the video happens
+  // inside the page instead -- which is also stronger, because the caller
+  // identity on screen is drawn rather than faked through Contacts.
+  //
+  // Here rather than in api/video-token.js because this project sits on
+  // exactly twelve functions and Vercel Hobby allows twelve. A thirteenth file
+  // fails the BUILD and takes the working endpoints with it.
+  //
+  // `room` is required and scopes the grant: a token is only ever good for one
+  // room, so one leaking cannot be used to join another performance.
+  const kind = String((req.query && req.query.kind) || 'voice');
+  if (kind === 'video') {
+    const room = String((req.query && req.query.room) || '');
+    if (!/^[A-Za-z0-9_-]{3,40}$/.test(room)) {
+      return res.status(400).json({ error: 'a room is required for a video token' });
+    }
+    // Who is joining. Only ever two, and the page labels the other side, so
+    // this is for Twilio's benefit rather than anything shown on screen.
+    const who = String((req.query && req.query.who) || '') === 'assistant'
+      ? 'assistant' : 'spectator';
+    return res.status(200).json(
+      mintToken({
+        identity: who,
+        grants: { video: { room: 'ringer-' + room } },
+        TWILIO_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
+      }));
+  }
+
   const identity = 'performer';
   const now = Math.floor(Date.now() / 1000);
   const header = { cty: 'twilio-fpa;v=1', typ: 'JWT', alg: 'HS256' };
@@ -55,3 +88,22 @@ module.exports = async function handler(req, res) {
   const sig = b64url(crypto.createHmac('sha256', TWILIO_API_KEY_SECRET).update(signingInput).digest());
   return res.status(200).json({ token: signingInput + '.' + sig, identity });
 };
+
+// The same JWT shape the voice path builds by hand, factored out so the video
+// grant cannot drift from it. One hour, same as the voice token: long enough
+// for any show, short enough that a leaked one is worthless tomorrow.
+function mintToken({ identity, grants, TWILIO_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET }) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { cty: 'twilio-fpa;v=1', typ: 'JWT', alg: 'HS256' };
+  const payload = {
+    jti: TWILIO_API_KEY_SID + '-' + now,
+    iss: TWILIO_API_KEY_SID,
+    sub: TWILIO_SID,
+    iat: now,
+    exp: now + 3600,
+    grants: Object.assign({ identity }, grants),
+  };
+  const signingInput = b64url(JSON.stringify(header)) + '.' + b64url(JSON.stringify(payload));
+  const sig = b64url(crypto.createHmac('sha256', TWILIO_API_KEY_SECRET).update(signingInput).digest());
+  return { token: signingInput + '.' + sig, identity };
+}
