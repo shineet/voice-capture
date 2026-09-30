@@ -27,6 +27,23 @@ module.exports = async function handler(req, res) {
   if (typeof body === 'string') { try { body = require('querystring').parse(body); } catch { body = {}; } }
   const mode = (body && body.mode) || (req.query && req.query.mode) || 'voicemail';
 
+  // The web dialler on a spectator's phone cannot carry any of this -- the
+  // assistant's number is a real person's, and the voicemail wording is the
+  // performer's script. It sends only its ROOM; Ringer pushed the rest to the
+  // show server beforehand, and we fetch it here machine to machine.
+  let fromRoom = null;
+  {
+    const room = (body && body.room) || (req.query && req.query.room) || '';
+    if (/^[A-Za-z0-9_-]{1,40}$/.test(String(room))) {
+      try {
+        const r = await fetch(
+          'https://mindgames.fly.dev/api/ringer/' + encodeURIComponent(room) + '/assistant',
+          { headers: { 'x-sms-token': process.env.SMS_TOKEN || '' } });
+        if (r.ok) fromRoom = await r.json();
+      } catch (e) { /* every use below tolerates null */ }
+    }
+  }
+
   if (mode === 'divert') {
     // The assistant number is configured in the APP and passed at call time
     // (not hard-coded). ASSISTANT_NUMBER env is only an optional fallback.
@@ -37,21 +54,8 @@ module.exports = async function handler(req, res) {
     // machine to machine. Shine works with different assistants on different
     // shows and a friend testing has their own, which is also why this is not
     // one environment variable.
-    let fromRoom = '';
-    const room = (body && body.room) || (req.query && req.query.room) || '';
-    if (!(body && body.assistant) && /^[A-Za-z0-9_-]{1,40}$/.test(String(room))) {
-      try {
-        const r = await fetch(
-          'https://mindgames.fly.dev/api/ringer/' + encodeURIComponent(room) + '/assistant',
-          { headers: { 'x-sms-token': process.env.SMS_TOKEN || '' } });
-        if (r.ok) {
-          const j = await r.json();
-          if (j && j.assistant) fromRoom = String(j.assistant);
-        }
-      } catch (e) { /* falls through to the env fallback and then the Say */ }
-    }
     const raw = (body && body.assistant) || (req.query && req.query.assistant)
-      || fromRoom || process.env.ASSISTANT_NUMBER || '';
+      || (fromRoom && fromRoom.assistant) || process.env.ASSISTANT_NUMBER || '';
     const assistant = /^\+?[0-9]{7,15}$/.test(String(raw).trim()) ? String(raw).trim() : '';
     // Caller ID shown on the assistant's phone. Default = the Twilio number. If
     // DIVERT_CALLER_ID is set to the performer's own VERIFIED number, the assistant
@@ -65,8 +69,10 @@ module.exports = async function handler(req, res) {
 
   // voicemail (first dial). Priority: app-provided text (chosen per show) ->
   // hosted recording (VOICEMAIL_URL env) -> default greeting.
-  const vmText = (body && body.vm) || (req.query && req.query.vm) || '';
-  const vmVoiceRaw = (body && body.vmvoice) || (req.query && req.query.vmvoice) || 'alice';
+  const vmText = (body && body.vm) || (req.query && req.query.vm)
+    || (fromRoom && fromRoom.vm) || '';
+  const vmVoiceRaw = (body && body.vmvoice) || (req.query && req.query.vmvoice)
+    || (fromRoom && fromRoom.vmvoice) || 'alice';
   const vmVoice = /^[A-Za-z0-9.\-]+$/.test(String(vmVoiceRaw)) ? String(vmVoiceRaw) : 'alice';
   if (vmText) {
     return xml(res, '<Say voice="' + esc(vmVoice) + '">' + esc(vmText) + '</Say><Pause length="1"/>');
