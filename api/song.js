@@ -529,11 +529,49 @@ async function namesForKeypad(digits) {
 // The key is restricted to this one API, so a leak costs the quota and nothing
 // else. It never reaches the browser: the phone asks this endpoint, this
 // endpoint asks Google.
+// Seconds from an ISO-8601 duration. Only ever PT#H#M#S from this API.
+function ytSeconds(d) {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(String(d || ''));
+  if (!m) return 0;
+  return (+(m[1] || 0)) * 3600 + (+(m[2] || 0)) * 60 + (+(m[3] || 0));
+}
+
+// Which of ten hits is actually the song.
+//
+// Taking items[0] on relevance alone put a meme clip -- "Michael Jackson
+// #sadrap #sadrappers #cool", 15M views, seven hashtags -- on a spectator's
+// phone while the real video sat in the up-next list at 1.5 BILLION views.
+//
+// Popularity is weighted at 2x the log because it is the strongest signal
+// there is for "the canonical recording of this song", and it has to outrank
+// the channel bonuses: at 1x, an Eagles "- Topic" live cut with 5M views beat
+// the 929M one purely on the Topic bonus. Verified across seven songs, all
+// returning the official video.
+function scoreVideo(v, query) {
+  const title = v.title || '';
+  const channel = (v.channel || '').toLowerCase();
+  let s = 2 * Math.log10(Math.max(v.views || 0, 1));
+
+  if (/vevo$/.test(channel)) s += 4;          // the artist's own channel
+  if (/- topic$/.test(channel)) s += 2;       // auto-generated official audio
+
+  const qw = new Set((query.toLowerCase().match(/[a-z0-9]+/g) || []));
+  const cw = (channel.match(/[a-z0-9]+/g) || []);
+  if (cw.some((w) => qw.has(w))) s += 2;      // channel named in the query
+
+  if ((title.match(/#/g) || []).length >= 2) s -= 8;
+  if (/#shorts|\bshorts\b/i.test(title)) s -= 6;
+  if (v.seconds && v.seconds < 70) s -= 6;    // a Short, not the song
+  if (v.seconds && v.seconds > 900) s -= 4;   // a compilation or a full album
+  if (/\b(reaction|react|review|tutorial|karaoke|sped up|slowed|8d audio)\b/i.test(title)) s -= 4;
+  return s;
+}
+
 async function youtubeSearch(query) {
   const url = 'https://www.googleapis.com/youtube/v3/search'
     + '?part=snippet'
     + '&type=video'           // a channel or a playlist has no /watch?v= to open
-    + '&maxResults=5'
+    + '&maxResults=10'        // ten, so there is something to rank
     + '&q=' + encodeURIComponent(query)
     + '&key=' + encodeURIComponent(process.env.YOUTUBE_API_KEY);
 
@@ -553,7 +591,7 @@ async function youtubeSearch(query) {
     return { error: 'YouTube: ' + message };
   }
 
-  const items = (data && Array.isArray(data.items) ? data.items : [])
+  let items = (data && Array.isArray(data.items) ? data.items : [])
     .filter((it) => it && it.id && it.id.videoId)
     .map((it) => ({
       videoId: it.id.videoId,
@@ -562,9 +600,40 @@ async function youtubeSearch(query) {
       // spoken about out loud, so they have to come out.
       title: decodeEntities(String((it.snippet && it.snippet.title) || '')),
       channel: decodeEntities(String((it.snippet && it.snippet.channelTitle) || '')),
+      views: 0,
+      seconds: 0,
     }));
 
   if (!items.length) return { videoId: '', title: '', channel: '', alternates: [] };
+
+  // One extra call, one quota unit against the search's hundred. Without the
+  // view count there is nothing to separate the official video from a clip
+  // that merely mentions the song.
+  try {
+    const ids = items.map((i) => i.videoId).join(',');
+    const sr = await fetch('https://www.googleapis.com/youtube/v3/videos'
+      + '?part=statistics,contentDetails&id=' + encodeURIComponent(ids)
+      + '&key=' + encodeURIComponent(process.env.YOUTUBE_API_KEY));
+    if (sr.ok) {
+      const sd = await sr.json();
+      const by = new Map();
+      (sd && Array.isArray(sd.items) ? sd.items : []).forEach((v) => by.set(v.id, v));
+      items.forEach((i) => {
+        const v = by.get(i.videoId);
+        if (!v) return;
+        i.views = Number((v.statistics && v.statistics.viewCount) || 0);
+        i.seconds = ytSeconds(v.contentDetails && v.contentDetails.duration);
+      });
+    }
+  } catch (e) {
+    // Ranking without view counts still beats taking the first row, so a
+    // failure here degrades rather than breaks.
+  }
+
+  items = items
+    .map((i) => ({ i, s: scoreVideo(i, query) }))
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.i);
 
   return {
     videoId: items[0].videoId,
