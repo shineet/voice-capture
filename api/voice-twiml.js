@@ -32,19 +32,21 @@ module.exports = async function handler(req, res) {
   // performer's script. It sends only its ROOM; Ringer pushed the rest to the
   // show server beforehand, and we fetch it here machine to machine.
   let fromRoom = null;
-  {
-    const room = (body && body.room) || (req.query && req.query.room) || '';
-    if (/^[A-Za-z0-9_-]{1,40}$/.test(String(room))) {
-      try {
-        const r = await fetch(
-          'https://mindgames.fly.dev/api/ringer/' + encodeURIComponent(room) + '/assistant',
-          { headers: { 'x-sms-token': process.env.SMS_TOKEN || '' } });
-        if (r.ok) fromRoom = await r.json();
-      } catch (e) { /* every use below tolerates null */ }
-    }
+  const roomRaw = (body && body.room) || (req.query && req.query.room) || '';
+  const room = /^[A-Za-z0-9_-]{1,40}$/.test(String(roomRaw)) ? String(roomRaw) : '';
+  if (room) {
+    try {
+      const r = await fetch(
+        'https://mindgames.fly.dev/api/ringer/' + encodeURIComponent(room) + '/assistant',
+        { headers: { 'x-sms-token': process.env.SMS_TOKEN || '' } });
+      if (r.ok) fromRoom = await r.json();
+    } catch (e) { /* every use below tolerates null */ }
   }
 
-  if (mode === 'divert') {
+  // Dialling the assistant's real mobile. Factored out because it is now reached
+  // from two places: the ordinary divert, and the fallback when he was supposed
+  // to answer in a browser and did not.
+  function divertToPhone() {
     // The assistant number is configured in the APP and passed at call time
     // (not hard-coded). ASSISTANT_NUMBER env is only an optional fallback.
     //
@@ -65,6 +67,46 @@ module.exports = async function handler(req, res) {
     if (!assistant) return xml(res, '<Say>Assistant number is not configured.</Say>');
     // answerOnBridge -> the caller hears ringing until the assistant picks up.
     return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(assistant) + '</Dial>');
+  }
+
+  // ── Second half of the client route ──────────────────────────────────────
+  //
+  // Reached as the `action` of the <Client> dial below, so it runs once that
+  // dial has finished one way or another.
+  //
+  //   completed  -- they talked and somebody hung up. Stop. WITHOUT this the
+  //                 call would carry straight on to the next verb and ring the
+  //                 assistant's mobile the instant the conversation ended,
+  //                 which in front of an audience is worse than no fallback.
+  //   anything   -- not registered, didn't answer, browser asleep. His real
+  //   else          phone, exactly as before. The spectator has heard nothing
+  //                 but ringing throughout.
+  if (mode === 'afterclient') {
+    const st = String((body && body.DialCallStatus) || (req.query && req.query.DialCallStatus) || '');
+    if (st === 'completed' || st === 'answered') return xml(res, '<Hangup/>');
+    return divertToPhone();
+  }
+
+  if (mode === 'divert') {
+    // The assistant answering in a BROWSER rather than on his mobile. This is
+    // the only arrangement in which the call is wideband: a mobile leg is G.711
+    // narrowband no matter what codec this end prefers, and an audience member
+    // listening to one said the assistant sounded like AI.
+    //
+    // Opt-in per room, set by the app when it pushes the night's config. Absent
+    // it, everything below is the behaviour this endpoint has always had.
+    //
+    // 15 seconds, then his phone. Long enough for him to tap Answer, short
+    // enough that the spectator is still hearing a plausible ring.
+    if (room && fromRoom && fromRoom.via === 'client') {
+      const action = '/api/voice-twiml?k=' + encodeURIComponent(k)
+        + '&mode=afterclient&room=' + encodeURIComponent(room);
+      return xml(res,
+        '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
+        + '<Client>assistant-' + esc(room) + '</Client>'
+        + '</Dial>');
+    }
+    return divertToPhone();
   }
 
   // voicemail (first dial). Priority: app-provided text (chosen per show) ->

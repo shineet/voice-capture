@@ -66,6 +66,32 @@ module.exports = async function handler(req, res) {
       }));
   }
 
+  // ── The assistant answering in a browser instead of on his mobile ──────
+  //
+  // The divert used to <Dial> his real phone, which puts the second half of the
+  // call on the PSTN: G.711, 3.4kHz, and no codec choice at the performer's end
+  // changes it. An audience member listening to one of these said the assistant
+  // sounded like AI. Browser to browser it is Opus wideband instead.
+  //
+  // INCOMING ONLY, and scoped to one room. This token can receive the call that
+  // <Client>assistant-<room></Client> sends and can do nothing else -- there is
+  // no outgoing grant at all, so one leaking off the assistant's phone cannot
+  // place a call on the account. Same reasoning as the video grant above, and
+  // the same reason it lives in this file rather than its own: twelve
+  // functions is the Hobby ceiling and a thirteenth fails the BUILD.
+  if (kind === 'client') {
+    const room = String((req.query && req.query.room) || '');
+    if (!/^[A-Za-z0-9_-]{3,40}$/.test(room)) {
+      return res.status(400).json({ error: 'a room is required for a client token' });
+    }
+    return res.status(200).json(
+      mintToken({
+        identity: 'assistant-' + room,
+        grants: { voice: { incoming: { allow: true } } },
+        TWILIO_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
+      }));
+  }
+
   const identity = 'performer';
   const now = Math.floor(Date.now() / 1000);
   const header = { cty: 'twilio-fpa;v=1', typ: 'JWT', alg: 'HS256' };
