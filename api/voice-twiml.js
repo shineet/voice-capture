@@ -99,7 +99,11 @@ module.exports = async function handler(req, res) {
     // 15 seconds, then his phone. Long enough for him to tap Answer, short
     // enough that the spectator is still hearing a plausible ring.
     if (room && fromRoom && fromRoom.via === 'client') {
-      const action = '/api/voice-twiml?k=' + encodeURIComponent(k)
+      // Absolute. Twilio does resolve a relative action against the request
+      // URL, but the cost of being wrong about that is the fallback silently
+      // not happening in front of an audience, and the host is right here.
+      const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
+      const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
         + '&mode=afterclient&room=' + encodeURIComponent(room);
       return xml(res,
         '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
