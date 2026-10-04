@@ -105,9 +105,15 @@ module.exports = async function handler(req, res) {
       const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
       const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
         + '&mode=afterclient&room=' + encodeURIComponent(room);
+      // The number the Spectator dialled, handed to the assistant's page so its
+      // call screen can show it the way a phone would. Cosmetic, and absent on
+      // paths that do not send it, which the page tolerates.
+      const dialled = String((body && body.To) || (body && body.caller) || '')
+        .replace(/[^0-9+]/g, '').slice(0, 16);
       return xml(res,
         '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
         + '<Client>assistant-' + esc(room) + '</Client>'
+        + (dialled ? '<Parameter name="dialled" value="' + esc(dialled) + '"/>' : '')
         + '</Dial>');
     }
     return divertToPhone();
