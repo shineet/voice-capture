@@ -435,6 +435,8 @@ async function searchSpotifyTrack(title, artist, market) {
 const FAMOUS_PROMPT =
   'You name the single film or television show a person is MOST FAMOUS for. ' +
   'Most popular and most widely recognised, not most acclaimed and not most recent. ' +
+  'A work where they played the lead or the role people know them by outranks one where they had a ' +
+  'supporting part, even if the supporting part came first. ' +
   'Answer JSON only: {"title": string, "kind": "film"|"tv", "alternates": [string, string]}. ' +
   'title is the work\'s common name with no year and no subtitle unless the subtitle is how ' +
   'everyone says it. alternates are the next two best-known works, most famous first. ' +
