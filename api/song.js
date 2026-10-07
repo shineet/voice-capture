@@ -426,22 +426,46 @@ async function searchSpotifyTrack(title, artist, market) {
 // Asked for the single most POPULAR rather than the best or the most
 // acclaimed: a spectator naming a celebrity is thinking of the famous one, not
 // the one that won things.
+//
+// Searches the web first, for the same reason as the movie lookup below: a
+// name that became famous after the model's training cutoff, or whose
+// best-known work has since changed, gets a stale or invented answer. The
+// prompt keeps "most famous, not most recent", because search results lean
+// toward whatever is in the news this week.
+const FAMOUS_PROMPT =
+  'You name the single film or television show a person is MOST FAMOUS for. ' +
+  'Most popular and most widely recognised, not most acclaimed and not most recent. ' +
+  'Answer JSON only: {"title": string, "kind": "film"|"tv", "alternates": [string, string]}. ' +
+  'title is the work\'s common name with no year and no subtitle unless the subtitle is how ' +
+  'everyone says it. alternates are the next two best-known works, most famous first. ' +
+  'If the name is not a real public figure, or you are not confident, answer {"title": ""}.';
+
 async function bestKnownWork(name) {
+  try {
+    const parsed = await askWithSearch(
+      FAMOUS_PROMPT +
+        ' Search the web when you do not recognise the name, know little about them, or their career ' +
+        'may have changed since your training (a breakout role in the last few years). Skip the search ' +
+        'for long-established stars. Search results favour what is new; still answer with the work the ' +
+        'person is MOST famous for, which is usually not their latest.',
+      name,
+    );
+    const found = normaliseFamous(parsed);
+    if (found.title) return found;
+  } catch (e) {
+    console.log('famous search failed, falling back:', e && e.message ? e.message : e);
+  }
+  return bestKnownWorkOffline(name);
+}
+
+// The original lookup, no search.
+async function bestKnownWorkOffline(name) {
   const body = {
     model: process.env.FAMOUS_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
-      {
-        role: 'system',
-        content:
-          'You name the single film or television show a person is MOST FAMOUS for. ' +
-          'Most popular and most widely recognised, not most acclaimed and not most recent. ' +
-          'Answer JSON only: {"title": string, "kind": "film"|"tv", "alternates": [string, string]}. ' +
-          'title is the work\'s common name with no year and no subtitle unless the subtitle is how ' +
-          'everyone says it. alternates are the next two best-known works, most famous first. ' +
-          'If the name is not a real public figure, or you are not confident, answer {"title": ""}.',
-      },
+      { role: 'system', content: FAMOUS_PROMPT },
       { role: 'user', content: name },
     ],
   };
@@ -457,6 +481,10 @@ async function bestKnownWork(name) {
   const json = await r.json();
   let parsed = {};
   try { parsed = JSON.parse(json.choices[0].message.content); } catch { parsed = {}; }
+  return normaliseFamous(parsed);
+}
+
+function normaliseFamous(parsed) {
   const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const alternates = Array.isArray(parsed.alternates)
     ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim()).slice(0, 2)
@@ -489,11 +517,19 @@ const MOVIE_PROMPT =
   'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
   'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.';
 
-const MOVIE_SEARCH_TIMEOUT_MS = 8000;
+const SEARCH_TIMEOUT_MS = 8000;
 
 async function identifyWork(text) {
   try {
-    const found = await identifyWorkSearching(text);
+    const parsed = await askWithSearch(
+      MOVIE_PROMPT +
+        ' Your own knowledge stops at your training cutoff and new films and shows come out every ' +
+        'week. Search the web whenever the input describes a work rather than naming it, mentions ' +
+        'anything recent ("last couple of years", "this year", "new"), or names a work you do not ' +
+        'recognise. Skip the search only when the input plainly names a well-known older work.',
+      text,
+    );
+    const found = normaliseWork(parsed);
     if (found.title) return found;
   } catch (e) {
     console.log('movie search failed, falling back:', e && e.message ? e.message : e);
@@ -501,9 +537,12 @@ async function identifyWork(text) {
   return identifyWorkOffline(text);
 }
 
-async function identifyWorkSearching(text) {
+// One model call that may search the web, returning the JSON object it
+// answers with. Throws on an HTTP error or after SEARCH_TIMEOUT_MS, so every
+// caller can fall back to its no-search lookup.
+async function askWithSearch(system, text) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), MOVIE_SEARCH_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
   try {
     const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -513,18 +552,12 @@ async function identifyWorkSearching(text) {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: process.env.MOVIE_SEARCH_MODEL || 'gpt-4.1',
+        model: process.env.SEARCH_MODEL || 'gpt-4.1',
         tools: [{ type: 'web_search' }],
         input: [
           {
             role: 'system',
-            content:
-              MOVIE_PROMPT +
-              ' Your own knowledge stops at your training cutoff and new films and shows come out every ' +
-              'week. Search the web whenever the input describes a work rather than naming it, mentions ' +
-              'anything recent ("last couple of years", "this year", "new"), or names a work you do not ' +
-              'recognise. Skip the search only when the input plainly names a well-known older work. ' +
-              'Reply with the JSON object and nothing else: no prose, no markdown, no citations.',
+            content: system + ' Reply with the JSON object and nothing else: no prose, no markdown, no citations.',
           },
           { role: 'user', content: text },
         ],
@@ -540,13 +573,10 @@ async function identifyWorkSearching(text) {
       .join('');
     // Not response_format: the web search tool can still wrap the answer in a
     // sentence, so take the outermost braces rather than trusting the whole text.
-    const a = out.indexOf('{');
-    const b = out.lastIndexOf('}');
-    let parsed = {};
-    if (a >= 0 && b > a) {
-      try { parsed = JSON.parse(out.slice(a, b + 1)); } catch { parsed = {}; }
-    }
-    return normaliseWork(parsed);
+    const i = out.indexOf('{');
+    const j = out.lastIndexOf('}');
+    if (i < 0 || j <= i) return {};
+    try { return JSON.parse(out.slice(i, j + 1)); } catch { return {}; }
   } finally {
     clearTimeout(timer);
   }
