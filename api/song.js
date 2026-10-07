@@ -489,7 +489,7 @@ const MOVIE_PROMPT =
   'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
   'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.';
 
-const MOVIE_SEARCH_TIMEOUT_MS = 12000;
+const MOVIE_SEARCH_TIMEOUT_MS = 8000;
 
 async function identifyWork(text) {
   try {
