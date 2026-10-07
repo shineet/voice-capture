@@ -449,6 +449,7 @@ const FAMOUS_PROMPT =
 // less familiar name the same way twice.
 const FAMOUS_FIXED = {
   naslen: { title: 'Premalu', kind: 'film', alternates: ['Lokah Chapter 1: Chandra', 'Alappuzha Gymkhana'] },
+  mohanlal: { title: 'Drishyam', kind: 'film', alternates: ['Spadikam', 'Kireedam'] },
 };
 
 function famousFixed(name) {
