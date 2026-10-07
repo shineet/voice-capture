@@ -445,9 +445,11 @@ async function bestKnownWork(name) {
     const parsed = await askWithSearch(
       FAMOUS_PROMPT +
         ' Search the web when you do not recognise the name, know little about them, or their career ' +
-        'may have changed since your training (a breakout role in the last few years). Skip the search ' +
-        'for long-established stars. Search results favour what is new; still answer with the work the ' +
-        'person is MOST famous for, which is usually not their latest.',
+        'may have changed since your training. Skip the search for long-established stars. If the ' +
+        'person became famous through a recent breakout (the role that won the big award, broke the ' +
+        'box office or made them a household name), that breakout IS their most famous work. But for ' +
+        'someone already famous before it, do not swap their defining work for a newer one just ' +
+        'because search results lean toward what is new.',
       name,
     );
     const found = normaliseFamous(parsed);
@@ -553,6 +555,7 @@ async function askWithSearch(system, text) {
       },
       body: JSON.stringify({
         model: process.env.SEARCH_MODEL || 'gpt-4.1',
+        temperature: 0,
         tools: [{ type: 'web_search' }],
         input: [
           {
