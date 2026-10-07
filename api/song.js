@@ -79,6 +79,30 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    // ── Anything said or written -> the film or TV show it means ───────────
+    // POST { movie: "dill wally dull hanya" }
+    //   -> { title, kind, year, language, alternates: [] }
+    //
+    // Same file and same reason as the modes around it (twelve functions).
+    // Any industry and language. The input is whatever a capture produced, so
+    // it is often wrong in a specific way -- misheard, misspelled, a
+    // handwriting misread, a nickname, a description -- and the model is asked
+    // to undo exactly those.
+    if (b && typeof b.movie === 'string' && b.movie.trim()) {
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+      }
+      try {
+        const found = await identifyWork(b.movie.trim());
+        if (!found || !found.title) {
+          return res.status(200).json({ error: `No film or show found for "${b.movie.trim()}"` });
+        }
+        return res.status(200).json(found);
+      } catch (e) {
+        return res.status(200).json({ error: String(e && e.message ? e.message : e) });
+      }
+    }
+
     if (b && typeof b.famousFor === 'string' && b.famousFor.trim()) {
       if (!process.env.OPENAI_API_KEY) {
         return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
@@ -438,6 +462,61 @@ async function bestKnownWork(name) {
     ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim()).slice(0, 2)
     : [];
   return { title, kind: parsed.kind === 'tv' ? 'tv' : 'film', alternates };
+}
+
+// Which film or TV show a captured phrase refers to.
+//
+// gpt-4o rather than the mini model the famous-person lookup uses: this one
+// has to recognise a Malayalam film from a misheard fragment, and the larger
+// model is far better at titles outside Hollywood. One short call per reveal.
+async function identifyWork(text) {
+  const body = {
+    model: process.env.MOVIE_MODEL || 'gpt-4o',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Identify the film or television show the user means. It can be from any country and in any ' +
+          'language: Hollywood, Bollywood, Tamil, Telugu, Malayalam, Kannada, Korean, Japanese, Spanish, ' +
+          'French, anything. The input came from speech recognition or handwriting recognition, so it may ' +
+          'be misheard, misspelled, phonetically spelled, partial, a nickname or abbreviation (DDLJ, LOTR, ' +
+          'K3G), or a description ("the one where the ship sinks"). Work out what was meant. ' +
+          'Answer JSON only: {"title": string, "kind": "film"|"tv", "year": number, "language": string, ' +
+          '"alternates": [string, string]}. title is the name as it is commonly written in English-language ' +
+          'listings: the English release title when that is how most people know it (Parasite, Spirited Away), ' +
+          'otherwise the romanized original title (Dilwale Dulhania Le Jayenge, Kabhi Khushi Kabhie Gham, ' +
+          'Manichitrathazhu). Proper capitalization, no year, no subtitle unless it is part of how everyone ' +
+          'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
+          'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.',
+      },
+      { role: 'user', content: text },
+    ],
+  };
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`OpenAI ${r.status}`);
+  const json = await r.json();
+  let parsed = {};
+  try { parsed = JSON.parse(json.choices[0].message.content); } catch { parsed = {}; }
+  const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+  const alternates = Array.isArray(parsed.alternates)
+    ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim() && a.trim() !== title).slice(0, 2)
+    : [];
+  return {
+    title,
+    kind: parsed.kind === 'tv' ? 'tv' : 'film',
+    year: Number.isFinite(parsed.year) ? parsed.year : undefined,
+    language: typeof parsed.language === 'string' ? parsed.language : undefined,
+    alternates,
+  };
 }
 
 // Which real first names a keypad sequence spells.
