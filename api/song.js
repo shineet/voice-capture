@@ -442,10 +442,46 @@ const FAMOUS_PROMPT =
   'everyone says it. alternates are the next two best-known works, most famous first. ' +
   'If the name is not a real public figure, or you are not confident, answer {"title": ""}.';
 
+// Shine's fixed answers: these win over the lookup every time. Add a line
+// whenever he disagrees with what it picks for someone he uses in a show.
+// Keys are lower-case letters only; a spoken name within one letter of a key
+// (naslin, nazlen) still matches, since speech recognition rarely spells a
+// less familiar name the same way twice.
+const FAMOUS_FIXED = {
+  naslen: { title: 'Premalu', kind: 'film', alternates: ['Lokah Chapter 1: Chandra', 'Alappuzha Gymkhana'] },
+};
+
+function famousFixed(name) {
+  const key = name.toLowerCase().replace(/[^a-z]/g, '');
+  if (FAMOUS_FIXED[key]) return FAMOUS_FIXED[key];
+  // Only keys of 5+ letters fuzzy-match: one letter off a short name is a
+  // different person far too often.
+  for (const k of Object.keys(FAMOUS_FIXED)) {
+    if (k.length >= 5 && Math.abs(k.length - key.length) <= 1 && editDistance(k, key) <= 1) return FAMOUS_FIXED[k];
+  }
+  return null;
+}
+
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
 async function bestKnownWork(name) {
+  const fixed = famousFixed(name);
+  if (fixed) return { ...fixed, alternates: [...fixed.alternates] };
   try {
     const parsed = await askWithSearch(
       FAMOUS_PROMPT +
+        ' The name came from speech recognition and may be misspelled or lower-case (naslin, sharukh): ' +
+        'work out who is meant and search their correctly spelled name.' +
         ' Search the web for the person first: your training ends at a cutoff and careers move on. ' +
         'If the person became famous through a recent breakout (the role that won the big award, broke the ' +
         'box office or made them a household name), that breakout IS their most famous work. But for ' +
