@@ -466,31 +466,102 @@ async function bestKnownWork(name) {
 
 // Which film or TV show a captured phrase refers to.
 //
-// gpt-4o rather than the mini model the famous-person lookup uses: this one
-// has to recognise a Malayalam film from a misheard fragment, and the larger
-// model is far better at titles outside Hollywood. One short call per reveal.
+// Searches the web first. The model alone cannot name anything released after
+// its training cutoff: "Bollywood blockbuster, Indian spy in Pakistan, Ranveer
+// Singh" came back as War (2019, Hrithik Roshan) because Dhurandhar (Dec 2025)
+// does not exist for it, and it answers with the nearest film it knows rather
+// than admitting that. The search is the model's choice per input, so a plain
+// title or nickname (DDLJ, K3G) still answers without one.
+//
+// Any failure or a slow search falls back to the old no-search lookup: a
+// possibly dated answer beats "Not found" in front of a room.
+const MOVIE_PROMPT =
+  'Identify the film or television show the user means. It can be from any country and in any ' +
+  'language: Hollywood, Bollywood, Tamil, Telugu, Malayalam, Kannada, Korean, Japanese, Spanish, ' +
+  'French, anything. The input came from speech recognition or handwriting recognition, so it may ' +
+  'be misheard, misspelled, phonetically spelled, partial, a nickname or abbreviation (DDLJ, LOTR, ' +
+  'K3G), or a description ("the one where the ship sinks"). Work out what was meant. ' +
+  'Answer JSON only: {"title": string, "kind": "film"|"tv", "year": number, "language": string, ' +
+  '"alternates": [string, string]}. title is the name as it is commonly written in English-language ' +
+  'listings: the English release title when that is how most people know it (Parasite, Spirited Away), ' +
+  'otherwise the romanized original title (Dilwale Dulhania Le Jayenge, Kabhi Khushi Kabhie Gham, ' +
+  'Manichitrathazhu). Proper capitalization, no year, no subtitle unless it is part of how everyone ' +
+  'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
+  'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.';
+
+const MOVIE_SEARCH_TIMEOUT_MS = 12000;
+
 async function identifyWork(text) {
+  try {
+    const found = await identifyWorkSearching(text);
+    if (found.title) return found;
+  } catch (e) {
+    console.log('movie search failed, falling back:', e && e.message ? e.message : e);
+  }
+  return identifyWorkOffline(text);
+}
+
+async function identifyWorkSearching(text) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MOVIE_SEARCH_TIMEOUT_MS);
+  try {
+    const r = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.MOVIE_SEARCH_MODEL || 'gpt-4.1',
+        tools: [{ type: 'web_search' }],
+        input: [
+          {
+            role: 'system',
+            content:
+              MOVIE_PROMPT +
+              ' Your own knowledge stops at your training cutoff and new films and shows come out every ' +
+              'week. Search the web whenever the input describes a work rather than naming it, mentions ' +
+              'anything recent ("last couple of years", "this year", "new"), or names a work you do not ' +
+              'recognise. Skip the search only when the input plainly names a well-known older work. ' +
+              'Reply with the JSON object and nothing else: no prose, no markdown, no citations.',
+          },
+          { role: 'user', content: text },
+        ],
+      }),
+    });
+    if (!r.ok) throw new Error(`OpenAI ${r.status}`);
+    const json = await r.json();
+    const out = (json.output || [])
+      .filter((o) => o.type === 'message')
+      .flatMap((o) => o.content || [])
+      .filter((c) => c.type === 'output_text')
+      .map((c) => c.text)
+      .join('');
+    // Not response_format: the web search tool can still wrap the answer in a
+    // sentence, so take the outermost braces rather than trusting the whole text.
+    const a = out.indexOf('{');
+    const b = out.lastIndexOf('}');
+    let parsed = {};
+    if (a >= 0 && b > a) {
+      try { parsed = JSON.parse(out.slice(a, b + 1)); } catch { parsed = {}; }
+    }
+    return normaliseWork(parsed);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The original lookup, no search. gpt-4o rather than the mini model the
+// famous-person lookup uses: it has to recognise a Malayalam film from a
+// misheard fragment, and the larger model is far better outside Hollywood.
+async function identifyWorkOffline(text) {
   const body = {
     model: process.env.MOVIE_MODEL || 'gpt-4o',
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
-      {
-        role: 'system',
-        content:
-          'Identify the film or television show the user means. It can be from any country and in any ' +
-          'language: Hollywood, Bollywood, Tamil, Telugu, Malayalam, Kannada, Korean, Japanese, Spanish, ' +
-          'French, anything. The input came from speech recognition or handwriting recognition, so it may ' +
-          'be misheard, misspelled, phonetically spelled, partial, a nickname or abbreviation (DDLJ, LOTR, ' +
-          'K3G), or a description ("the one where the ship sinks"). Work out what was meant. ' +
-          'Answer JSON only: {"title": string, "kind": "film"|"tv", "year": number, "language": string, ' +
-          '"alternates": [string, string]}. title is the name as it is commonly written in English-language ' +
-          'listings: the English release title when that is how most people know it (Parasite, Spirited Away), ' +
-          'otherwise the romanized original title (Dilwale Dulhania Le Jayenge, Kabhi Khushi Kabhie Gham, ' +
-          'Manichitrathazhu). Proper capitalization, no year, no subtitle unless it is part of how everyone ' +
-          'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
-          'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.',
-      },
+      { role: 'system', content: MOVIE_PROMPT },
       { role: 'user', content: text },
     ],
   };
@@ -506,6 +577,10 @@ async function identifyWork(text) {
   const json = await r.json();
   let parsed = {};
   try { parsed = JSON.parse(json.choices[0].message.content); } catch { parsed = {}; }
+  return normaliseWork(parsed);
+}
+
+function normaliseWork(parsed) {
   const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const alternates = Array.isArray(parsed.alternates)
     ? parsed.alternates.filter((a) => typeof a === 'string' && a.trim() && a.trim() !== title).slice(0, 2)
