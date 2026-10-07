@@ -444,13 +444,16 @@ async function bestKnownWork(name) {
   try {
     const parsed = await askWithSearch(
       FAMOUS_PROMPT +
-        ' Search the web when you do not recognise the name, know little about them, or their career ' +
-        'may have changed since your training. Skip the search for long-established stars. If the ' +
-        'person became famous through a recent breakout (the role that won the big award, broke the ' +
+        ' Search the web for the person first: your training ends at a cutoff and careers move on. ' +
+        'If the person became famous through a recent breakout (the role that won the big award, broke the ' +
         'box office or made them a household name), that breakout IS their most famous work. But for ' +
         'someone already famous before it, do not swap their defining work for a newer one just ' +
         'because search results lean toward what is new.',
       name,
+      // Always, unlike the movie lookup: left to choose, it skipped the
+      // search for half-known names (Mikey Madison -> Better Things, not
+      // Anora) and answered from stale memory. One name, one call per reveal.
+      { forceSearch: true },
     );
     const found = normaliseFamous(parsed);
     if (found.title) return found;
@@ -542,7 +545,7 @@ async function identifyWork(text) {
 // One model call that may search the web, returning the JSON object it
 // answers with. Throws on an HTTP error or after SEARCH_TIMEOUT_MS, so every
 // caller can fall back to its no-search lookup.
-async function askWithSearch(system, text) {
+async function askWithSearch(system, text, { forceSearch = false } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
   try {
@@ -557,6 +560,7 @@ async function askWithSearch(system, text) {
         model: process.env.SEARCH_MODEL || 'gpt-4.1',
         temperature: 0,
         tools: [{ type: 'web_search' }],
+        tool_choice: forceSearch ? 'required' : 'auto',
         input: [
           {
             role: 'system',
