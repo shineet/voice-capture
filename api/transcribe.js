@@ -133,6 +133,11 @@ module.exports = async function handler(req, res) {
   // Parsed straight off req.url since bodyParser is disabled (req.query isn't
   // guaranteed here); a plain substring check is enough for a single flag.
   const indianNames = /[?&]names=indian(?:&|$)/.test(req.url || '');
+  // ?names=person: the routine is asking for someone's first name. The
+  // generic "word, name, or place" prompt let Whisper settle on an ordinary
+  // word ("Rose" came back "Cross"); naming the shape of the answer, with a
+  // few everyday examples, pulls it toward names.
+  const personNames = !indianNames && /[?&]names=person(?:&|$)/.test(req.url || '');
   // Same idea for Song Mode captures (?songs=indian): seed Whisper with Indian-
   // music context so a Bollywood/regional title spoken in the clip comes back
   // closer to searchable rather than transliterated into something Spotify
@@ -199,6 +204,8 @@ module.exports = async function handler(req, res) {
     let whisperPrompt = 'A single word, name, or place, spoken clearly.';
     if (indianNames) {
       whisperPrompt = 'A single Indian name, spoken clearly. Examples: Aarav, Vivaan, Aditya, Arjun, Rohan, Karthik, Rahul, Sanjay, Vijay, Deepak, Rajesh, Suresh, Anil, Ravi, Nikhil, Pranav, Aryan, Ishaan, Krishna, Aakash, Priya, Ananya, Aishwarya, Divya, Meera, Kavya, Neha, Pooja, Sneha, Lakshmi, Anjali, Shreya, Riya, Nisha, Deepika, Swati, Radha, Sita, Fatima, Zoya.';
+    } else if (personNames) {
+      whisperPrompt = "A person's first name, spoken clearly. Names such as Emma, Rose, James, Rachel, Michael, Sophia, David, Grace.";
     } else if (anySongs) {
       // Deliberately names no specific songs. The Indian prompt lists titles
       // because romanized spelling needs anchoring; here the only thing worth
