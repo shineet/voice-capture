@@ -59,6 +59,10 @@ module.exports = async (req, res) => {
   try {
     let body = req.body;
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = null; } }
+    // The routine maker rides on this endpoint (Vercel Hobby allows 12
+    // functions and api/ is at 12). See routineMaker below.
+    if (body && body.routineMaker) return routineMaker(body.routineMaker, res);
+
     const { instruction, found } = body || {};
     const want = (typeof instruction === 'string' ? instruction : '').trim();
     if (!want) return res.status(400).json({ error: 'Say what you want replaced' });
@@ -126,3 +130,121 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: String(e.message || e) });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Routine maker: POST { routineMaker: { request, catalog } } -> a routine spec
+//
+// Shine says what he wants in one sentence -- "I will swipe a card and it
+// should print the cat's photo with the card on it" -- and MystIO builds the
+// routine. The APP sends the catalog (every input, processing step, output,
+// option and saved photo it has, with a line on what each one is for), so the
+// app stays the one place that knows what exists; this only chooses from it.
+// Anything chosen that is not in the catalog is dropped here and again in the
+// app. Something asked for that the catalog cannot do goes in `missing`, never
+// onto the nearest thing: a routine wired to the wrong output looks exactly
+// like one that works until the reveal.
+
+const ROUTINE_MODEL = process.env.ROUTINE_MODEL || 'gpt-4.1';
+
+const ROUTINE_SYSTEM = [
+  'You set up routines in MystIO, a mentalist\'s performance app. A routine is:',
+  'one or more INPUTS (how the secret value reaches the phone), ONE processing',
+  'step (what is done to the value), OUTPUTS (where the value is revealed),',
+  'at most one PROP, an optional app to open when the routine is armed, and',
+  'OPTIONS that configure the chosen outputs.',
+  '',
+  'You are given the performer\'s description and a CATALOG. Use ONLY ids from',
+  'the catalog. Read every hint: they say which choice fits which wording, and',
+  'which options an output needs switched on to do anything at all. Switching',
+  'on the options the description implies is the most important part of the',
+  'job -- an output with its options off does nothing.',
+  '',
+  'Return STRICT JSON only:',
+  '{"name": "<short routine name, 2-5 words>",',
+  ' "inputs": ["<input id>", ...],',
+  ' "processing": "<processing id>",',
+  ' "outputs": ["<output id>", ...],',
+  ' "prop": "<prop id or empty>",',
+  ' "launchApp": "<url from the apps list, or empty>",',
+  ' "options": {"<option key>": <true|false|"text">, ...},',
+  ' "missing": ["<plain sentence: something asked for that the catalog cannot do>"],',
+  ' "assumptions": ["<plain sentence: a choice you made that the description did not state>"]}',
+  '',
+  'Rules:',
+  '- Only include an option when the description implies it or a hint says the',
+  '  output needs it. Use the option\'s exact key and type.',
+  '- For a "pick" option, the value must be one of its listed choices exactly.',
+  '- Never invent ids, keys or choices. If nothing fits, leave it out and say so',
+  '  in missing.',
+  '- If the description is silent about the processing, use "none".',
+  '- Keep assumptions few and concrete, written to the performer ("you").',
+].join('\n');
+
+async function routineMaker(input, res) {
+  const request = typeof input.request === 'string' ? input.request.trim() : '';
+  const catalog = input.catalog;
+  if (!request) return res.status(400).json({ error: 'Say what the routine should do' });
+  if (!catalog || !Array.isArray(catalog.inputs) || !Array.isArray(catalog.outputs)) {
+    return res.status(400).json({ error: 'No catalog sent' });
+  }
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: ROUTINE_MODEL,
+        response_format: { type: 'json_object' },
+        max_tokens: 900,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: ROUTINE_SYSTEM },
+          { role: 'user', content: `CATALOG:\n${JSON.stringify(catalog)}\n\nThe performer says: "${request}"` },
+        ],
+      }),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      return res.status(502).json({ error: `Model refused (${r.status}): ${text.slice(0, 300)}` });
+    }
+    const out = JSON.parse((await r.json())?.choices?.[0]?.message?.content || '{}');
+
+    const ids = (list) => new Set((list || []).map((x) => x.id));
+    const inIds = ids(catalog.inputs), outIds = ids(catalog.outputs);
+    const procIds = ids(catalog.processing), propIds = ids(catalog.props);
+    const apps = new Set((catalog.apps || []).map((a) => a.url));
+    const optByKey = new Map((catalog.options || []).map((o) => [o.key, o]));
+    const dropped = [];
+    const keep = (list, valid, what) => (Array.isArray(list) ? list : []).filter((x) => {
+      if (valid.has(x)) return true;
+      dropped.push(`${what} "${x}"`); return false;
+    });
+
+    const options = {};
+    for (const [k, v] of Object.entries(out.options || {})) {
+      const o = optByKey.get(k);
+      if (!o) { dropped.push(`option "${k}"`); continue; }
+      if (o.type === 'bool' && typeof v === 'boolean') options[k] = v;
+      else if (o.type === 'text' && typeof v === 'string') options[k] = v;
+      else if (o.type === 'pick' && typeof v === 'string' && (o.choices || []).includes(v)) options[k] = v;
+      else dropped.push(`option "${k}" = ${JSON.stringify(v)}`);
+    }
+
+    res.json({
+      name: typeof out.name === 'string' ? out.name.trim().slice(0, 60) : '',
+      inputs: keep(out.inputs, inIds, 'input'),
+      processing: procIds.has(out.processing) ? out.processing : 'none',
+      outputs: keep(out.outputs, outIds, 'output'),
+      prop: propIds.has(out.prop) ? out.prop : '',
+      launchApp: apps.has(out.launchApp) ? out.launchApp : '',
+      options,
+      missing: (Array.isArray(out.missing) ? out.missing : []).filter((x) => typeof x === 'string'),
+      assumptions: (Array.isArray(out.assumptions) ? out.assumptions : []).filter((x) => typeof x === 'string'),
+      dropped,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+}
