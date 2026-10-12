@@ -177,7 +177,12 @@ const ROUTINE_SYSTEM = [
   '- Never invent ids, keys or choices. If nothing fits, leave it out and say so',
   '  in missing.',
   '- If the description is silent about the processing, use "none".',
-  '- Keep assumptions few and concrete, written to the performer ("you").',
+  '- Keep assumptions few and concrete, written to the performer ("you"), and',
+  '  only for choices the description did NOT state. Do not restate what they said.',
+  '- Write missing and assumptions in plain words. Never mention ids, option',
+  '  keys or JSON -- say "printing is on", not "cardPhotoPrint".',
+  '- missing is only for things the catalog cannot do. Something the catalog\'s',
+  '  setup section says is already in place is not missing.',
 ].join('\n');
 
 async function routineMaker(input, res) {
