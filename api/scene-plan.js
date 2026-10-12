@@ -181,6 +181,7 @@ const ROUTINE_SYSTEM = [
   '  only for choices the description did NOT state. Do not restate what they said.',
   '- Write missing and assumptions in plain words. Never mention ids, option',
   '  keys or JSON -- say "printing is on", not "cardPhotoPrint".',
+  '- Never put in missing something the routine you are returning already does.',
   '- missing is only for things the catalog cannot do. Something the catalog\'s',
   '  setup section says is already in place is not missing.',
 ].join('\n');
