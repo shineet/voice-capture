@@ -338,7 +338,7 @@ function similarity(a, b) {
   return 1 - prev[n] / Math.max(m, n);
 }
 
-async function spotifySearch(q, limit, token, market) {
+async function spotifySearch(q, limit, token, market, offset = 0) {
   // The market is not a nicety. Searching WITHOUT it returns catalogue-wide
   // track ids that may not be playable where the listener actually is, and
   // Spotify does not refuse a play aimed at one -- it accepts the request and
@@ -346,6 +346,7 @@ async function spotifySearch(q, limit, token, market) {
   // item. That is precisely the trace Greg kept producing. With a market,
   // Spotify relinks to the id that IS playable for him.
   const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=${limit}`
+    + (offset ? `&offset=${offset}` : '')
     + (market ? `&market=${encodeURIComponent(market)}` : '');
   const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) {
@@ -396,7 +397,13 @@ async function searchSpotifyTrack(title, artist, market) {
   //    turns "Librarian Girl" into "Liberian Girl": same artist, one letter
   //    out, and comparing the words directly finds what no query would.
   if (artist) {
-    const catalogue = await spotifySearch(`artist:${artist}`, 50, token, market);
+    // Five pages of ten, not one of fifty. Spotify now caps a search at 10
+    // for this app and answers 50 with "Invalid limit", which failed the
+    // WHOLE request: "movie Tezaab, ek do teen" came back as that error
+    // instead of a song (2026-10-15). A page that fails is skipped.
+    const pages = await Promise.all([0, 10, 20, 30, 40].map((off) =>
+      spotifySearch(`artist:${artist}`, 10, token, market, off).catch(() => [])));
+    const catalogue = pages.flat();
     let best = null, bestScore = 0;
     for (const t of catalogue) {
       if (!artistMatches(t, artist)) continue;
