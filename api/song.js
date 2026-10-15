@@ -93,7 +93,7 @@ module.exports = async function handler(req, res) {
         return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
       }
       try {
-        const found = await identifyWork(b.movie.trim());
+        const found = await identifyWork(b.movie.trim(), b.indian === true);
         if (!found || !found.title) {
           return res.status(200).json({ error: `No film or show found for "${b.movie.trim()}"` });
         }
@@ -574,12 +574,22 @@ const MOVIE_PROMPT =
   'says it. alternates are the next two most likely intended works, most likely first. If the input ' +
   'is too vague to name any real film or show with reasonable confidence, answer {"title": ""}.';
 
+// The Indian lean, a PREFERENCE like the song one (Shine, 2026-10-15):
+// garbled words with no strong clue fell back to an English reading, so "show
+// lay" came back Lay the Favorite instead of Sholay. A clearly named Hollywood
+// film is still that film.
+const MOVIE_INDIAN_LEAN =
+  ' The audience is Indian, so the work is OFTEN Indian (Bollywood or a regional industry) but not ' +
+  'always: a clearly named Hollywood or other film is exactly that film. When the words are garbled, ' +
+  'partial or ambiguous, prefer the Indian reading: "show lay" is Sholay, "la gone" is Lagaan.';
+
 const SEARCH_TIMEOUT_MS = 8000;
 
-async function identifyWork(text) {
+async function identifyWork(text, indian = false) {
+  const lean = indian ? MOVIE_INDIAN_LEAN : '';
   try {
     const parsed = await askWithSearch(
-      MOVIE_PROMPT +
+      MOVIE_PROMPT + lean +
         ' Your own knowledge stops at your training cutoff and new films and shows come out every ' +
         'week. Search the web whenever the input describes a work rather than naming it, mentions ' +
         'anything recent ("last couple of years", "this year", "new"), or names a work you do not ' +
@@ -591,7 +601,7 @@ async function identifyWork(text) {
   } catch (e) {
     console.log('movie search failed, falling back:', e && e.message ? e.message : e);
   }
-  return identifyWorkOffline(text);
+  return identifyWorkOffline(text, lean);
 }
 
 // One model call that may search the web, returning the JSON object it
@@ -644,13 +654,13 @@ async function askWithSearch(system, text, { forceSearch = false } = {}) {
 // The original lookup, no search. gpt-4o rather than the mini model the
 // famous-person lookup uses: it has to recognise a Malayalam film from a
 // misheard fragment, and the larger model is far better outside Hollywood.
-async function identifyWorkOffline(text) {
+async function identifyWorkOffline(text, lean = '') {
   const body = {
     model: process.env.MOVIE_MODEL || 'gpt-4o',
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: MOVIE_PROMPT },
+      { role: 'system', content: MOVIE_PROMPT + lean },
       { role: 'user', content: text },
     ],
   };
