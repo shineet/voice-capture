@@ -216,13 +216,19 @@ async function extractSongGuess(transcript, indian) {
   // Indian (Bollywood/film or regional) and to lean toward playback singers,
   // romanized titles, and the film name as artist context -- which is what
   // actually makes the downstream Spotify search resolve a Hindi/Tamil/etc.
-  // title instead of missing. Off by default so it never skews a Western song.
+  // title instead of missing. A PREFERENCE, not a filter (Shine, 2026-10-15):
+  // told the song "is likely Indian", it refused "Hello by Adele" outright,
+  // and an Indian audience names English songs too.
   const systemContent = indian
     ? 'You extract the song being discussed in a conversation transcript. ' +
-      'The song is likely Indian -- a Bollywood/film song or a regional ' +
-      '(Hindi, Tamil, Telugu, Punjabi, etc.) song. The transcript is English ' +
-      'speech-to-text and may have mangled the title or artist. Use your ' +
-      'knowledge of Indian music to recover the actual song: give the ' +
+      'The audience is Indian, so the song is OFTEN Indian -- a Bollywood/film ' +
+      'song or a regional (Hindi, Tamil, Telugu, Punjabi, etc.) song -- but ' +
+      'not always: an English or other Western song named clearly (for ' +
+      'example "Hello by Adele") is exactly that song, and you return it ' +
+      'as named. Lean Indian only when the words are mangled or ambiguous. ' +
+      'The transcript is English speech-to-text and may have mangled the ' +
+      'title or artist. For an Indian song, use your knowledge of Indian ' +
+      'music to recover the actual song: give the ' +
       'commonly-searchable romanized title, and for a film song set the ' +
       'playback singer(s) as artist when you know them (e.g. Arijit Singh, ' +
       'Shreya Ghoshal, Lata Mangeshkar, Kishore Kumar, Sonu Nigam, ' +
