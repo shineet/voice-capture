@@ -170,7 +170,7 @@ async function sketchByCoordinates(word) {
 
 module.exports = async function handler(req, res) {
   // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
-  if (await refuseIfLocked(req, res, 'thermal,pitata,sprocket')) return;
+  if (await refuseIfLocked(req, res, 'thermal,pitata,sprocket,motherboard,duo,lumenspectra,lumenprism')) return;
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
