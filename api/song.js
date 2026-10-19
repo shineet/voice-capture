@@ -1,3 +1,4 @@
+const { refuseIfLocked } = require('../lib/mystio-gate');
 // api/song.js
 // POST { transcript: string } -> { title, artist, spotifyUri, spotifyUrl }
 //
@@ -13,6 +14,8 @@
 // the destination app would still have to disambiguate itself.
 
 module.exports = async function handler(req, res) {
+  // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
+  if (await refuseIfLocked(req, res, 'song,lookups')) return;
   // ── Diagnostic sink ────────────────────────────────────────────────────────
   // A POST carrying `diag` is not a song lookup. It is the app reporting what
   // actually happened on a Spotify playback attempt, so a fault can be read

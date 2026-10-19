@@ -1,3 +1,4 @@
+const { refuseIfLocked } = require('../lib/mystio-gate');
 // api/handwriting.js
 // POST { strokes: [{x:[...], y:[...], t:[...]}, ...] } -> { candidates: [string] }
 //
@@ -23,6 +24,8 @@ const crypto = require('crypto');
 const ENDPOINT = 'https://cloud.myscript.com/api/v4.0/iink/batch';
 
 module.exports = async (req, res) => {
+  // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
+  if (await refuseIfLocked(req, res, 'any')) return;
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'POST only' });
   }

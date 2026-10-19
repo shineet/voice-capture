@@ -1,3 +1,4 @@
+const { refuseIfLocked } = require('../lib/mystio-gate');
 // api/sketch.js
 // POST { word: string } -> { strokes: [[x0,y0,x1,y1,...], ...], engine }
 //
@@ -168,6 +169,8 @@ async function sketchByCoordinates(word) {
 }
 
 module.exports = async function handler(req, res) {
+  // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
+  if (await refuseIfLocked(req, res, 'thermal,pitata,sprocket')) return;
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');

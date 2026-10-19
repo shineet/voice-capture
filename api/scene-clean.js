@@ -1,3 +1,4 @@
+const { refuseIfLocked } = require('../lib/mystio-gate');
 // api/scene-clean.js
 // POST { image, mask } (both base64 PNG, same size) -> { image: base64 PNG }
 //
@@ -49,6 +50,8 @@ const PROMPT = [
 ].join(' ');
 
 module.exports = async (req, res) => {
+  // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
+  if (await refuseIfLocked(req, res, 'photostudio')) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });

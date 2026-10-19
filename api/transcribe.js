@@ -1,3 +1,4 @@
+const { refuseIfLocked } = require('../lib/mystio-gate');
 // api/transcribe.js
 // POST either JSON { audio: base64 string, mimeType: string } (web app), or
 // raw audio bytes with Content-Type set to the mime type (native app).
@@ -101,6 +102,8 @@ async function elevenLabsTTS(req, res) {
 }
 
 module.exports = async function handler(req, res) {
+  // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
+  if (await refuseIfLocked(req, res, 'any')) return;
   const url = req.url || '';
 
   // ElevenLabs voice list for the Mental Voice picker.
