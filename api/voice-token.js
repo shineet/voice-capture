@@ -84,10 +84,24 @@ module.exports = async function handler(req, res) {
     if (!/^[A-Za-z0-9_-]{3,40}$/.test(room)) {
       return res.status(400).json({ error: 'a room is required for a client token' });
     }
+    // Ringer's Assistant mode (the app, not the web page) also needs Twilio to
+    // WAKE it for the call, through Apple's VoIP push. `push` says which of
+    // Apple's servers the phone's token belongs to: a build installed from the
+    // Mac is sandbox, TestFlight is production, and Twilio keeps one push
+    // credential (CR...) for each. The web page never sends `push`, so its
+    // token is unchanged.
+    const voice = { incoming: { allow: true } };
+    const push = String((req.query && req.query.push) || '');
+    const cred = push === 'sandbox' ? process.env.TWILIO_PUSH_CRED_SANDBOX
+      : push === 'production' ? process.env.TWILIO_PUSH_CRED_PRODUCTION : '';
+    if (push && !cred) {
+      return res.status(500).json({ error: `no Twilio push credential for ${push}` });
+    }
+    if (cred) voice.push_credential_sid = cred;
     return res.status(200).json(
       mintToken({
         identity: 'assistant-' + room,
-        grants: { voice: { incoming: { allow: true } } },
+        grants: { voice },
         TWILIO_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
       }));
   }
