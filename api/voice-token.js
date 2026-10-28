@@ -83,7 +83,14 @@ module.exports = async function handler(req, res) {
   // The secret is derived from TWILIO_API_KEY_SECRET with a label, so no new
   // env var, and rotating the API key re-verifies everyone, which is right.
   if (kind === 'verify-start' || kind === 'verify-check' || kind === 'ringer') {
-    const number = String((req.query && req.query.number) || '').trim();
+    // Forgiving about the form, strict about the result: a "+" that arrived
+    // as a space, no country code on a ten-digit US number, or punctuation.
+    let raw = String((req.query && req.query.number) || '').trim();
+    let digits0 = raw.replace(/[^0-9]/g, '');
+    if (!raw.startsWith('+')) {
+      if (digits0.length === 10) digits0 = '1' + digits0;
+    }
+    const number = '+' + digits0;
     if (!/^\+[1-9][0-9]{7,14}$/.test(number)) {
       return res.status(400).json({ error: 'a number in +15125551234 form is required' });
     }
