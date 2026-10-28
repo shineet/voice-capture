@@ -118,10 +118,11 @@ module.exports = async function handler(req, res) {
     console.log('[divert] via=' + (viaClient ? 'client' : 'phone'),
       'assistant=..' + (assistantNum ? assistantNum.slice(-4) : (String(assistantRaw).slice(-4) || 'none')),
       'room=' + (room || '-'));
-    // KILL SWITCH (2026-10-28): the Duo kept ringing for its own divert when
-    // both of Shine's phones were confirmed on one number. Off until fixed;
-    // every divert goes straight to the mobile, as before Ringer-as-assistant.
-    const CLIENT_LEG_ENABLED = process.env.RINGER_CLIENT_LEG === 'on';
+    // KILL SWITCH. Set RINGER_CLIENT_LEG=off (and redeploy) to send every
+    // divert straight to the mobile. Used on 2026-10-28 when the Duo kept
+    // ringing for its own divert with both of Shine's phones on one number;
+    // Ringer now steps out of assistant calls while calling its own number.
+    const CLIENT_LEG_ENABLED = process.env.RINGER_CLIENT_LEG !== 'off';
     if (CLIENT_LEG_ENABLED && viaClient && (assistantNum || room)) {
       const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
       // Absolute: Twilio would resolve a relative action, but being wrong
