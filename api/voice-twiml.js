@@ -28,7 +28,13 @@ module.exports = async function handler(req, res) {
 
   let body = req.body;
   if (typeof body === 'string') { try { body = require('querystring').parse(body); } catch { body = {}; } }
-  const mode = (body && body.mode) || (req.query && req.query.mode) || 'voicemail';
+  // The fallback is asked for in the ACTION URL's query (mode=afterclient),
+  // but Twilio's callback body repeats the call's original parameters,
+  // mode=divert included, and the body used to win: every unanswered client
+  // leg started the divert again, every 20 seconds, for as long as the
+  // performer stayed on (2026-10-28). The URL's afterclient outranks it.
+  const mode = (req.query && req.query.mode === 'afterclient') ? 'afterclient'
+    : ((body && body.mode) || (req.query && req.query.mode) || 'voicemail');
 
   // The web dialler on a spectator's phone cannot carry any of this -- the
   // assistant's number is a real person's, and the voicemail wording is the
@@ -142,7 +148,9 @@ module.exports = async function handler(req, res) {
       const clients = (assistantNum
           ? '<Client><Identity>' + esc(ringerIdentity(assistantNum)) + '</Identity>' + params + '</Client>' : '')
         + (room ? '<Client><Identity>assistant-' + esc(room) + '</Identity>' + params + '</Client>' : '');
-      return xml(res, '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
+      // ringTone: an app ringing makes no ringback of its own (a phone
+      // number's carrier supplies one), so the performer heard silence.
+      return xml(res, '<Dial answerOnBridge="true" ringTone="us" timeout="15" method="POST" action="' + esc(action) + '">'
         + clients + '</Dial>');
     }
     return divertToPhone();
