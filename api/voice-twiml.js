@@ -33,8 +33,9 @@ module.exports = async function handler(req, res) {
   // mode=divert included, and the body used to win: every unanswered client
   // leg started the divert again, every 20 seconds, for as long as the
   // performer stayed on (2026-10-28). The URL's afterclient outranks it.
-  const mode = (req.query && req.query.mode === 'afterclient') ? 'afterclient'
-    : ((body && body.mode) || (req.query && req.query.mode) || 'voicemail');
+  const queryMode = req.query && req.query.mode;
+  const mode = (queryMode === 'afterclient' || queryMode === 'callbackafter') ? queryMode
+    : ((body && body.mode) || queryMode || 'voicemail');
 
   // The web dialler on a spectator's phone cannot carry any of this -- the
   // assistant's number is a real person's, and the voicemail wording is the
@@ -98,6 +99,38 @@ module.exports = async function handler(req, res) {
     return divertToPhone();
   }
 
+  // ── Call back ──────────────────────────────────────────────────────────
+  //
+  // The assistant ringing the performer again after the line dropped, from
+  // Ringer's Call Back bar (2026-10-28). Same shape as the divert: the
+  // performer's Ringer first, by its number, then their mobile after 15 s.
+  // `assistant` here is the number being called back; `back` is the caller's
+  // own, so the performer can call back in turn.
+  if (mode === 'callback' || mode === 'callbackafter') {
+    const toRaw = String((body && body.assistant) || (req.query && req.query.assistant) || '').trim();
+    const to = /^\+[1-9][0-9]{7,14}$/.test(toRaw) ? toRaw : '';
+    if (!to) return xml(res, '<Say>That number cannot be called back.</Say>');
+    if (mode === 'callbackafter') {
+      const st = String((body && body.DialCallStatus) || '');
+      console.log('[callback] client leg ended', st || '(none)');
+      if (st === 'completed' || st === 'answered') return xml(res, '<Hangup/>');
+      const from = process.env.DIVERT_CALLER_ID || process.env.TWILIO_FROM;
+      return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(to) + '</Dial>');
+    }
+    const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
+    const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
+      + '&mode=callbackafter&assistant=' + encodeURIComponent(to);
+    const backRaw = String((body && body.back) || '').trim();
+    const back = /^\+[1-9][0-9]{7,14}$/.test(backRaw) ? backRaw : '';
+    const who = String((body && body.performer) || '').replace(/[^\p{L}\p{N} .'-]/gu, '').slice(0, 40);
+    const params = (room ? '<Parameter name="room" value="' + esc(room) + '"/>' : '')
+      + (who ? '<Parameter name="performer" value="' + esc(who) + '"/>' : '')
+      + (back ? '<Parameter name="back" value="' + esc(back) + '"/>' : '');
+    console.log('[callback] to=..' + to.slice(-4), 'room=' + (room || '-'));
+    return xml(res, '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
+      + '<Client><Identity>' + esc(ringerIdentity(to)) + '</Identity>' + params + '</Client></Dial>');
+  }
+
   if (mode === 'divert') {
     // The assistant answering in a BROWSER rather than on his mobile. This is
     // the only arrangement in which the call is wideband: a mobile leg is G.711
@@ -142,7 +175,12 @@ module.exports = async function handler(req, res) {
       const dialled = String((body && body.To) || (body && body.caller) || '')
         .replace(/[^0-9+]/g, '').slice(0, 16);
       const performer = String((body && body.performer) || '').replace(/[^\p{L}\p{N} .'-]/gu, '').slice(0, 40);
+      // The performer's own confirmed number, so the assistant can ring them
+      // back after the line drops (mode=callback below).
+      const backRaw = String((body && body.back) || '').trim();
+      const back = /^\+[1-9][0-9]{7,14}$/.test(backRaw) ? backRaw : '';
       const params = (room ? '<Parameter name="room" value="' + esc(room) + '"/>' : '')
+        + (back ? '<Parameter name="back" value="' + esc(back) + '"/>' : '')
         + (performer ? '<Parameter name="performer" value="' + esc(performer) + '"/>' : '')
         + (dialled ? '<Parameter name="dialled" value="' + esc(dialled) + '"/>' : '');
       const clients = (assistantNum
