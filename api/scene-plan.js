@@ -52,6 +52,14 @@ const SYSTEM = [
 ].join('\n');
 
 module.exports = async (req, res) => {
+  // Help me (2026-10-28) rides here too, and is for every tester rather than
+  // the two modules below: any code that has anything at all may ask how the
+  // app works. Checked before the narrower lock for that reason.
+  if (req.method === 'POST' && req.body && typeof req.body === 'object' && req.body.helpMe) {
+    if (await refuseIfLocked(req, res, HELP_ANY_MODULE)) return;
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+    return helpMe(req.body.helpMe, res);
+  }
   // The server lock (lib/mystio-gate.js): off until MYSTIO_LOCK=on.
   if (await refuseIfLocked(req, res, 'photostudio,routinemaker')) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
@@ -255,5 +263,108 @@ async function routineMaker(input, res) {
     });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
+  }
+}
+
+
+// ── Help me ─────────────────────────────────────────────────────────────────
+//
+// The performer types what they want ("make the Thumper stop pressing
+// Return", "my card reader is not connecting") and MystIO answers, takes them
+// to the screen, or changes the setting or routine for them. Same rule as the
+// routine maker: the APP sends what exists on this phone (screens, settings
+// with current values, routines, devices), filtered to the modules this code
+// has, and the answer may only name what it was sent. The app checks every id
+// again and asks before changing anything.
+
+const HELP_MODEL = process.env.HELP_MODEL || 'gpt-4.1';
+const HELP_ANY_MODULE = 'voice,routinemaker,remote_mb,remote_thumper,remote_wilson,remote_synaptic,calculator,readers,audience,cardphoto,motherboard,customurl';
+
+const HELP_SYSTEM = [
+  'You are the help inside MystIO, a mentalist\'s performance app on an iPhone.',
+  'You talk to the performer: short, plain, friendly, no jargon. Never mention',
+  'ids, keys, JSON or code. Never mention anything that is not in CONTEXT: if a',
+  'feature is not listed, this performer does not have it, and you say only',
+  'that you cannot see a way to do that here.',
+  '',
+  'CONTEXT has:',
+  '- screens: places you can send them (id, title, where it is, what is there).',
+  '- settings: app-wide settings (key, label, where, type, current value, hint).',
+  '  "changeable" ones you may change for them; the rest you send them to.',
+  '- routines: their routines with inputs, processing, outputs and options as',
+  '  they are now, and which one is armed.',
+  '- routineCatalog: every input, processing, output and routine option that',
+  '  exists, with hints. A routine change may only use these ids and keys.',
+  '- devices: what is connected right now, for troubleshooting.',
+  '',
+  'How to help:',
+  '- If they want something changed, find the setting or routine option that',
+  '  does it. Prefer changing it for them (an action) over describing the taps.',
+  '  Say in one sentence what will change. Always also give an open action to',
+  '  where it lives, so they can see it.',
+  '- If it is a routine, say which routine and what changes. If it is unclear',
+  '  which routine they mean, ask, listing the likely ones by name.',
+  '- If something is not working, use devices and the current values to find',
+  '  the likely cause, say it plainly, and offer the fix as an action.',
+  '- If you need to know something, ask one short question.',
+  '- Keep the reply under 90 words. Numbered steps only when they must tap',
+  '  through something themselves.',
+  '',
+  'Return STRICT JSON only:',
+  '{"reply": "<what you say>",',
+  ' "actions": [',
+  '   {"kind": "open", "screen": "<screen id>"},',
+  '   {"kind": "set", "key": "<changeable setting key>", "value": <true|false|number>},',
+  '   {"kind": "routine", "id": "<routine id>",',
+  '    "addInputs": ["<input id>"], "removeInputs": [], "addOutputs": ["<output id>"],',
+  '    "removeOutputs": [], "processing": "<processing id or empty>",',
+  '    "options": {"<option key>": <true|false|"text">}}',
+  ' ]}',
+  '',
+  'Rules:',
+  '- Only ids, keys and choices that are in CONTEXT. Never invent one.',
+  '- A set value must match the setting type (bool or number in its range).',
+  '- Leave out fields of a routine action that do not change.',
+  '- actions may be empty. Never more than 4.',
+  '- Do not repeat an action that the conversation shows was already done.',
+].join('\n');
+
+async function helpMe(input, res) {
+  const messages = Array.isArray(input.messages) ? input.messages : [];
+  const context = input.context;
+  const turns = messages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-12)
+    .map(m => ({ role: m.role, content: m.content.slice(0, 2000) }));
+  if (!turns.length || turns[turns.length - 1].role !== 'user') {
+    return res.status(400).json({ error: 'Ask a question' });
+  }
+  if (!context || typeof context !== 'object') return res.status(400).json({ error: 'No context sent' });
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: HELP_MODEL,
+        response_format: { type: 'json_object' },
+        max_tokens: 900,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: HELP_SYSTEM },
+          { role: 'system', content: 'CONTEXT:\n' + JSON.stringify(context) },
+          ...turns,
+        ],
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) return res.status(502).json({ error: (j.error && j.error.message) || `Help failed (${r.status})` });
+    let out = {};
+    try { out = JSON.parse(j.choices[0].message.content); } catch { out = {}; }
+    const reply = typeof out.reply === 'string' ? out.reply.replace(/—/g, ',') : '';
+    const actions = Array.isArray(out.actions) ? out.actions.slice(0, 4) : [];
+    if (!reply) return res.status(502).json({ error: 'Help did not answer. Try again.' });
+    return res.status(200).json({ reply, actions });
+  } catch (e) {
+    return res.status(500).json({ error: 'Help failed: ' + e.message });
   }
 }
