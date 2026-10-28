@@ -86,6 +86,8 @@ module.exports = async function handler(req, res) {
   //                 but ringing throughout.
   if (mode === 'afterclient') {
     const st = String((body && body.DialCallStatus) || (req.query && req.query.DialCallStatus) || '');
+    // Why a divert ended up on the mobile, when it did. Last four digits only.
+    console.log('[divert] client leg ended', st || '(none)', 'room=' + (room || '-'));
     if (st === 'completed' || st === 'answered') return xml(res, '<Hangup/>');
     return divertToPhone();
   }
@@ -113,6 +115,9 @@ module.exports = async function handler(req, res) {
     const assistantRaw = (body && body.assistant) || (req.query && req.query.assistant)
       || (fromRoom && fromRoom.assistant) || '';
     const assistantNum = /^\+[1-9][0-9]{7,14}$/.test(String(assistantRaw).trim()) ? String(assistantRaw).trim() : '';
+    console.log('[divert] via=' + (viaClient ? 'client' : 'phone'),
+      'assistant=..' + (assistantNum ? assistantNum.slice(-4) : (String(assistantRaw).slice(-4) || 'none')),
+      'room=' + (room || '-'));
     if (viaClient && (assistantNum || room)) {
       const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
       // Absolute: Twilio would resolve a relative action, but being wrong
