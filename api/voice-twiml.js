@@ -12,6 +12,9 @@
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+/// The Twilio identity of the Ringer that owns a number. Same as in
+/// voice-token.js, which mints it: change both or neither.
+function ringerIdentity(e164) { return 'ringer_' + String(e164).replace(/[^0-9]/g, ''); }
 function xml(res, body) {
   res.setHeader('Content-Type', 'text/xml');
   res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response>' + body + '</Response>');
@@ -98,23 +101,39 @@ module.exports = async function handler(req, res) {
     //
     // 15 seconds, then his phone. Long enough for him to tap Answer, short
     // enough that the spectator is still hearing a plausible ring.
-    if (room && fromRoom && fromRoom.via === 'client') {
-      // Absolute. Twilio does resolve a relative action against the request
-      // URL, but the cost of being wrong about that is the fallback silently
-      // not happening in front of an audience, and the host is right here.
+    // Since 2026-10-28 every Ringer is also an assistant, signed up with
+    // Twilio as ringer_<its own number>. So "VoIP all the way" needs nothing
+    // but the assistant's number, which the performer's app sends with every
+    // call (`via=client`); the room is only for the video leg. The old way,
+    // a room pushed with via=client and a page or app registered as
+    // assistant-<room>, still rings too: both are dialled at once and the
+    // first to answer takes the call.
+    const viaClient = String((body && body.via) || '') === 'client'
+      || !!(fromRoom && fromRoom.via === 'client');
+    const assistantRaw = (body && body.assistant) || (req.query && req.query.assistant)
+      || (fromRoom && fromRoom.assistant) || '';
+    const assistantNum = /^\+[1-9][0-9]{7,14}$/.test(String(assistantRaw).trim()) ? String(assistantRaw).trim() : '';
+    if (viaClient && (assistantNum || room)) {
       const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
+      // Absolute: Twilio would resolve a relative action, but being wrong
+      // about that means the fallback silently not happening on stage.
+      // The fallback needs the number again: Twilio's callback carries none
+      // of the app's own parameters, and there may be no room to look it up.
       const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
-        + '&mode=afterclient&room=' + encodeURIComponent(room);
-      // The number the Spectator dialled, handed to the assistant's page so its
-      // call screen can show it the way a phone would. Cosmetic, and absent on
-      // paths that do not send it, which the page tolerates.
+        + '&mode=afterclient'
+        + (room ? '&room=' + encodeURIComponent(room) : '')
+        + (assistantNum ? '&assistant=' + encodeURIComponent(assistantNum) : '');
       const dialled = String((body && body.To) || (body && body.caller) || '')
         .replace(/[^0-9+]/g, '').slice(0, 16);
-      return xml(res,
-        '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
-        + '<Client>assistant-' + esc(room) + '</Client>'
-        + (dialled ? '<Parameter name="dialled" value="' + esc(dialled) + '"/>' : '')
-        + '</Dial>');
+      const performer = String((body && body.performer) || '').replace(/[^\p{L}\p{N} .'-]/gu, '').slice(0, 40);
+      const params = (room ? '<Parameter name="room" value="' + esc(room) + '"/>' : '')
+        + (performer ? '<Parameter name="performer" value="' + esc(performer) + '"/>' : '')
+        + (dialled ? '<Parameter name="dialled" value="' + esc(dialled) + '"/>' : '');
+      const clients = (assistantNum
+          ? '<Client><Identity>' + esc(ringerIdentity(assistantNum)) + '</Identity>' + params + '</Client>' : '')
+        + (room ? '<Client><Identity>assistant-' + esc(room) + '</Identity>' + params + '</Client>' : '');
+      return xml(res, '<Dial answerOnBridge="true" timeout="15" method="POST" action="' + esc(action) + '">'
+        + clients + '</Dial>');
     }
     return divertToPhone();
   }

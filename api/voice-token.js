@@ -66,6 +66,88 @@ module.exports = async function handler(req, res) {
       }));
   }
 
+  // ── Ringer: every phone is an assistant, known by its own number ───────
+  //
+  // Shine, 2026-10-28: no assistant mode, no room. Any Ringer phone can be
+  // anyone's assistant; the performer sets the assistant's NUMBER, as he
+  // always has, and the divert rings the Ringer that owns that number.
+  //
+  // The number has to be proved, or anyone could claim Shine's and receive
+  // the calls (and video) meant for him. iOS will not tell an app its own
+  // number, so it is confirmed once by a texted code. STATELESS, because a
+  // store means a thirteenth function or a database for six digits: the code
+  // is an HMAC of the number and the moment it was sent, so checking it needs
+  // nothing but the secret. The proof that comes back is an HMAC of the
+  // number alone; the phone keeps it and presents it for every token.
+  //
+  // The secret is derived from TWILIO_API_KEY_SECRET with a label, so no new
+  // env var, and rotating the API key re-verifies everyone, which is right.
+  if (kind === 'verify-start' || kind === 'verify-check' || kind === 'ringer') {
+    const number = String((req.query && req.query.number) || '').trim();
+    if (!/^\+[1-9][0-9]{7,14}$/.test(number)) {
+      return res.status(400).json({ error: 'a number in +15125551234 form is required' });
+    }
+    const digits = number.slice(1);
+
+    if (kind === 'verify-start') {
+      const { TWILIO_TOKEN, TWILIO_FROM } = process.env;
+      if (!TWILIO_TOKEN || !TWILIO_FROM) return res.status(500).json({ error: 'SMS not configured' });
+      const ts = String(Math.floor(Date.now() / 1000));
+      const code = verifyCode(digits, ts, TWILIO_API_KEY_SECRET);
+      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Basic ' + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ To: number, From: TWILIO_FROM, Body: `Your Ringer code is ${code}` }).toString(),
+      });
+      if (!r.ok) {
+        const why = await r.json().catch(() => ({}));
+        return res.status(502).json({ error: why.message || `Twilio refused the text (${r.status})` });
+      }
+      return res.status(200).json({ ts });
+    }
+
+    if (kind === 'verify-check') {
+      const ts = String((req.query && req.query.ts) || '');
+      const code = String((req.query && req.query.code) || '').trim();
+      const age = Math.floor(Date.now() / 1000) - Number(ts);
+      // Ten minutes: long enough to find the text, short enough that six
+      // digits cannot be walked in the time.
+      if (!/^[0-9]{10}$/.test(ts) || !(age >= 0 && age <= 600)) {
+        return res.status(400).json({ error: 'That code has expired. Send a new one.' });
+      }
+      const want = Buffer.from(verifyCode(digits, ts, TWILIO_API_KEY_SECRET));
+      const got = Buffer.from(code.padEnd(want.length, 'x').slice(0, want.length));
+      if (!crypto.timingSafeEqual(want, got) || code.length !== want.length) {
+        return res.status(400).json({ error: 'That code is not right.' });
+      }
+      return res.status(200).json({ proof: ringerProof(digits, TWILIO_API_KEY_SECRET) });
+    }
+
+    // kind === 'ringer': an incoming-only token for this number's identity,
+    // and only with the proof that the number was confirmed on this phone.
+    const proof = String((req.query && req.query.proof) || '');
+    const want = Buffer.from(ringerProof(digits, TWILIO_API_KEY_SECRET));
+    const got = Buffer.from(proof.padEnd(want.length, 'x').slice(0, want.length));
+    if (proof.length !== want.length || !crypto.timingSafeEqual(want, got)) {
+      return res.status(401).json({ error: 'this number has not been confirmed on this phone' });
+    }
+    const voice = { incoming: { allow: true } };
+    const push = String((req.query && req.query.push) || '');
+    const cred = push === 'sandbox' ? process.env.TWILIO_PUSH_CRED_SANDBOX
+      : push === 'production' ? process.env.TWILIO_PUSH_CRED_PRODUCTION : '';
+    if (push && !cred) return res.status(500).json({ error: `no Twilio push credential for ${push}` });
+    if (cred) voice.push_credential_sid = cred;
+    return res.status(200).json(
+      mintToken({
+        identity: ringerIdentity(number),
+        grants: { voice },
+        TWILIO_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
+      }));
+  }
+
   // ── The assistant answering in a browser instead of on his mobile ──────
   //
   // The divert used to <Dial> his real phone, which puts the second half of the
@@ -128,6 +210,20 @@ module.exports = async function handler(req, res) {
   const sig = b64url(crypto.createHmac('sha256', TWILIO_API_KEY_SECRET).update(signingInput).digest());
   return res.status(200).json({ token: signingInput + '.' + sig, identity });
 };
+
+function verifyCode(digits, ts, secret) {
+  const h = crypto.createHmac('sha256', 'ringer-verify|' + secret).update(digits + '|' + ts).digest();
+  return String(h.readUInt32BE(0) % 1000000).padStart(6, '0');
+}
+
+function ringerProof(digits, secret) {
+  return crypto.createHmac('sha256', 'ringer-proof|' + secret).update(digits).digest('hex');
+}
+
+/// The Twilio identity of the Ringer that owns a number. voice-twiml.js
+/// dials the same string and has its own copy: each file here is a separate
+/// function bundle, so they cannot share a module. Change both or neither.
+function ringerIdentity(e164) { return 'ringer_' + String(e164).replace(/[^0-9]/g, ''); }
 
 // The same JWT shape the voice path builds by hand, factored out so the video
 // grant cannot drift from it. One hour, same as the voice token: long enough
