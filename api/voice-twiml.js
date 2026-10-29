@@ -201,6 +201,17 @@ module.exports = async function handler(req, res) {
   const vmVoiceRaw = (body && body.vmvoice) || (req.query && req.query.vmvoice)
     || (fromRoom && fromRoom.vmvoice) || 'alice';
   const vmVoice = /^[A-Za-z0-9.\-]+$/.test(String(vmVoiceRaw)) ? String(vmVoiceRaw) : 'alice';
+  // A recorded greeting uploaded from Ringer wins over the spoken text: a
+  // text-to-speech voice is the part that sounded computer-made (Shine,
+  // 2026-10-29). Only our own uploads, so a parameter cannot point Twilio at
+  // anything else.
+  // Ringer always sends the field, empty once the recording is removed, so
+  // the room's copy (for the web dialler) never outlives it.
+  const vmUrlRaw = String(body && 'vmurl' in body ? body.vmurl
+    : (req.query && req.query.vmurl) || (fromRoom && fromRoom.vmurl) || '');
+  if (/^https:\/\/mindgames\.fly\.dev\/media\/vm-[a-z0-9]+\.wav$/.test(vmUrlRaw)) {
+    return xml(res, '<Play>' + esc(vmUrlRaw) + '</Play><Pause length="1"/>');
+  }
   if (vmText) {
     return xml(res, '<Say voice="' + esc(vmVoice) + '">' + esc(vmText) + '</Say><Pause length="1"/>');
   }
