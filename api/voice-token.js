@@ -124,6 +124,9 @@ module.exports = async function handler(req, res) {
     if (!/^\+[1-9][0-9]{7,14}$/.test(to) || room.length < 3) {
       return res.status(400).json({ error: 'assistant and room required' });
     }
+    // Two phones on one number (Shine testing): the other phone cannot be
+    // reached by number, and the call would ring the caller itself.
+    if (to === mine) return res.status(200).json({ skipped: 'same number' });
     // The invite's custom parameters ride on the client address.
     const params = new URLSearchParams({
       kind: 'facetime', room, back: mine,
