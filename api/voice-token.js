@@ -82,6 +82,68 @@ module.exports = async function handler(req, res) {
   //
   // The secret is derived from TWILIO_API_KEY_SECRET with a label, so no new
   // env var, and rotating the API key re-verifies everyone, which is right.
+  // ── FaceTime from Recents, to a locked phone ───────────────────────────
+  //
+  // The performer taps FaceTime Video in Ringer's Recents with no call up
+  // (Shine, 2026-10-29). The video rings through the room's flag, which the
+  // assistant's Ringer only reads while it is open; a locked phone never saw
+  // it. So this also places a call to the assistant's Ringer, which arrives
+  // by VoIP push like any call and is shown as an incoming FaceTime Video.
+  // Answering it opens the video; the call itself is never accepted, so no
+  // voice leg ever connects. kind=facetime-cancel ends it when the performer
+  // gives up. Gated on the CALLER's number proof, so only a confirmed Ringer
+  // can make another phone ring. Here because this project is at twelve
+  // functions.
+  if (kind === 'facetime-ring' || kind === 'facetime-cancel') {
+    const { TWILIO_TOKEN } = process.env;
+    if (!TWILIO_TOKEN) return res.status(500).json({ error: 'calls not configured' });
+    const q = req.query || {};
+    const mine = '+' + String(q.number || '').replace(/[^0-9]/g, '');
+    const proof = String(q.proof || '');
+    const want = Buffer.from(ringerProof(mine.slice(1), TWILIO_API_KEY_SECRET));
+    const got = Buffer.from(proof.padEnd(want.length, 'x').slice(0, want.length));
+    if (!/^\+[1-9][0-9]{7,14}$/.test(mine) || proof.length !== want.length || !crypto.timingSafeEqual(want, got)) {
+      return res.status(401).json({ error: 'this number has not been confirmed on this phone' });
+    }
+    const auth = 'Basic ' + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64');
+    if (kind === 'facetime-cancel') {
+      const sid = String(q.sid || '');
+      if (!/^CA[0-9a-f]{32}$/.test(sid)) return res.status(400).json({ error: 'sid required' });
+      // Canceled while ringing; completed if it somehow got further.
+      for (const Status of ['canceled', 'completed']) {
+        const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Calls/${sid}.json`, {
+          method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ Status }).toString(),
+        });
+        if (r.ok) return res.status(200).json({ ok: true, status: Status });
+      }
+      return res.status(200).json({ ok: false });
+    }
+    const to = '+' + String(q.assistant || '').replace(/[^0-9]/g, '');
+    const room = String(q.room || '').slice(0, 64);
+    if (!/^\+[1-9][0-9]{7,14}$/.test(to) || room.length < 3) {
+      return res.status(400).json({ error: 'assistant and room required' });
+    }
+    // The invite's custom parameters ride on the client address.
+    const params = new URLSearchParams({
+      kind: 'facetime', room, back: mine,
+      performer: String(q.performer || '').slice(0, 60),
+    }).toString();
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Calls.json`, {
+      method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        To: 'client:' + ringerIdentity(to) + '?' + params,
+        From: 'client:facetime',
+        Twiml: '<Response><Pause length="60"/></Response>',
+        Timeout: '45',
+      }).toString(),
+    });
+    const d = await r.json().catch(() => ({}));
+    console.log('[facetime-ring] to=..' + to.slice(-4) + ' room=' + room + ' status=' + r.status + (d.sid ? ' sid=' + d.sid : ' ' + (d.message || '')));
+    if (!r.ok) return res.status(502).json({ error: d.message || `Twilio refused (${r.status})` });
+    return res.status(200).json({ sid: d.sid });
+  }
+
   if (kind === 'verify-start' || kind === 'verify-check' || kind === 'ringer') {
     // Forgiving about the form, strict about the result: a "+" that arrived
     // as a space, no country code on a ten-digit US number, or punctuation.
