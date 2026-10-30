@@ -29,7 +29,13 @@ module.exports = async function handler(req, res) {
   if (!TWILIO_SID || !TWILIO_API_KEY_SID || !TWILIO_API_KEY_SECRET || !TWILIO_TWIML_APP_SID) {
     return res.status(500).json({ error: 'Voice not configured (need TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_TWIML_APP_SID)' });
   }
-  if (SMS_TOKEN && req.headers['x-sms-token'] !== SMS_TOKEN) {
+  // The App Store build (CallFriend) carries RINGER_PUBLIC_TOKEN, never the
+  // SMS token: a store binary is readable by anyone who downloads it. Its
+  // calls go out as identity "public", which voice-twiml holds to US/Canada,
+  // the Twilio number as caller ID and a daily limit.
+  const given = req.headers['x-sms-token'];
+  const isPublic = Boolean(process.env.RINGER_PUBLIC_TOKEN) && given === process.env.RINGER_PUBLIC_TOKEN;
+  if (SMS_TOKEN && given !== SMS_TOKEN && !isPublic) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -162,6 +168,10 @@ module.exports = async function handler(req, res) {
     const digits = number.slice(1);
 
     if (kind === 'verify-start') {
+      // A store copy may text a code to US/Canada numbers only.
+      if (isPublic && !/^\+1[2-9][0-9]{9}$/.test(number)) {
+        return res.status(400).json({ error: 'Only US and Canada numbers can be confirmed.' });
+      }
       const { TWILIO_TOKEN, TWILIO_FROM } = process.env;
       if (!TWILIO_TOKEN || !TWILIO_FROM) return res.status(500).json({ error: 'SMS not configured' });
       const ts = String(Math.floor(Date.now() / 1000));
@@ -260,7 +270,7 @@ module.exports = async function handler(req, res) {
       }));
   }
 
-  const identity = 'performer';
+  const identity = isPublic ? 'public' : 'performer';
   const now = Math.floor(Date.now() / 1000);
   const header = { cty: 'twilio-fpa;v=1', typ: 'JWT', alg: 'HS256' };
   const payload = {

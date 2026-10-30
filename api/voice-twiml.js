@@ -56,6 +56,33 @@ module.exports = async function handler(req, res) {
   // Dialling the assistant's real mobile. Factored out because it is now reached
   // from two places: the ordinary divert, and the fallback when he was supposed
   // to answer in a browser and did not.
+  // A store copy (CallFriend, identity "public") or a room one set up
+  // (owner:false) is RESTRICTED: the assistant comes only from the room, real
+  // phones only in the US and Canada, the Twilio number as caller ID (never
+  // Shine's), and /api/ringer/quota decides whether it rings at all today.
+  // Shine's own rooms and builds are untouched. Action callbacks carry r=1.
+  const caller = String((body && (body.From || body.Caller)) || '');
+  const restricted = (req.query && req.query.r === '1')
+    || (fromRoom ? fromRoom.owner === false : caller === 'client:public');
+  const R = restricted ? '&r=1' : '';
+  const NANP = /^\+1[2-9][0-9]{9}$/;
+  if (restricted && (mode === 'voicemail' || mode === 'divert' || mode === 'callback')) {
+    let ok = false;
+    try {
+      const q = await fetch('https://mindgames.fly.dev/api/ringer/quota', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-sms-token': process.env.SMS_TOKEN || '' },
+        body: JSON.stringify({ room: room || '-' }),
+      });
+      ok = q.ok && (await q.json()).ok === true;
+    } catch (e) { ok = false; }
+    if (!ok) return xml(res, '<Say>This call cannot be completed today.</Say>');
+  }
+  // The real phone a restricted divert reaches is the room's, never one the
+  // caller names. A callback only rings an app (no real phone behind it when
+  // restricted), so it keeps its number.
+  if (restricted && mode !== 'callback' && body && typeof body === 'object') delete body.assistant;
+
   function divertToPhone() {
     // The assistant number is configured in the APP and passed at call time
     // (not hard-coded). ASSISTANT_NUMBER env is only an optional fallback.
@@ -67,13 +94,15 @@ module.exports = async function handler(req, res) {
     // shows and a friend testing has their own, which is also why this is not
     // one environment variable.
     const raw = (body && body.assistant) || (req.query && req.query.assistant)
-      || (fromRoom && fromRoom.assistant) || process.env.ASSISTANT_NUMBER || '';
-    const assistant = /^\+?[0-9]{7,15}$/.test(String(raw).trim()) ? String(raw).trim() : '';
+      || (fromRoom && fromRoom.assistant) || (restricted ? '' : process.env.ASSISTANT_NUMBER) || '';
+    let assistant = /^\+?[0-9]{7,15}$/.test(String(raw).trim()) ? String(raw).trim() : '';
+    if (restricted && !NANP.test(assistant)) assistant = '';
     // Caller ID shown on the assistant's phone. Default = the Twilio number. If
     // DIVERT_CALLER_ID is set to the performer's own VERIFIED number, the assistant
     // sees the call as coming from the performer, so tapping FaceTime on the native
     // call screen reaches the performer directly. Only the assistant sees this.
-    const from = process.env.DIVERT_CALLER_ID || process.env.TWILIO_FROM;
+    const from = restricted ? process.env.TWILIO_FROM
+      : (process.env.DIVERT_CALLER_ID || process.env.TWILIO_FROM);
     if (!assistant) return xml(res, '<Say>Assistant number is not configured.</Say>');
     // answerOnBridge -> the caller hears ringing until the assistant picks up.
     return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(assistant) + '</Dial>');
@@ -114,12 +143,14 @@ module.exports = async function handler(req, res) {
       const st = String((body && body.DialCallStatus) || '');
       console.log('[callback] client leg ended', st || '(none)');
       if (st === 'completed' || st === 'answered') return xml(res, '<Hangup/>');
+      // A store copy's callback stays app to app: no real phone behind it.
+      if (restricted) return xml(res, '<Hangup/>');
       const from = process.env.DIVERT_CALLER_ID || process.env.TWILIO_FROM;
       return xml(res, '<Dial callerId="' + esc(from) + '" answerOnBridge="true">' + esc(to) + '</Dial>');
     }
     const host = (req.headers && req.headers.host) || 'voice-capture-bice.vercel.app';
     const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
-      + '&mode=callbackafter&assistant=' + encodeURIComponent(to);
+      + '&mode=callbackafter&assistant=' + encodeURIComponent(to) + R;
     const backRaw = String((body && body.back) || '').trim();
     const back = /^\+[1-9][0-9]{7,14}$/.test(backRaw) ? backRaw : '';
     const who = String((body && body.performer) || '').replace(/[^\p{L}\p{N} .'-]/gu, '').slice(0, 40);
@@ -169,7 +200,7 @@ module.exports = async function handler(req, res) {
       // The fallback needs the number again: Twilio's callback carries none
       // of the app's own parameters, and there may be no room to look it up.
       const action = 'https://' + host + '/api/voice-twiml?k=' + encodeURIComponent(k)
-        + '&mode=afterclient'
+        + '&mode=afterclient' + R
         + (room ? '&room=' + encodeURIComponent(room) : '')
         + (assistantNum ? '&assistant=' + encodeURIComponent(assistantNum) : '');
       const dialled = String((body && body.To) || (body && body.caller) || '')
